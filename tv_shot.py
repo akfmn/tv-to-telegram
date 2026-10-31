@@ -132,6 +132,9 @@ def shoot(page, chart, out_path):
         page.keyboard.press("Escape")
         time.sleep(0.3)
     page.mouse.move(5, 5)  # move cursor away so no crosshair on chart
+    # Hide floating toolbars over the chart (favorite drawing tools etc.)
+    page.add_style_tag(content=".tv-floating-toolbar{display:none !important}")
+    time.sleep(0.3)
     area = page.locator(".layout__area--center")
     if area.count() > 0:
         area.first.screenshot(path=out_path)
