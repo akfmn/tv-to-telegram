@@ -15,7 +15,7 @@ Settings come from GitHub Secrets (Settings -> Secrets and variables -> Actions)
   TV_SESSIONID_SIGN   - "sessionid_sign" cookie from tradingview.com
 Optional (Variables, not secrets):
   SYMBOL              - default symbol for lines without one (empty = what the layout has)
-  INTERVAL            - force an interval for all charts (empty = use the layout's own timeframe)
+  INTERVAL            - default interval in minutes, default 5
   TZ_NAME             - default Asia/Jerusalem
   WORK_HOURS          - default 09:00-17:00 (local time), empty = any time
   WORK_DAYS           - default 1-5 (1=Mon ... 7=Sun), e.g. "1-5" or "7,1,2,3,4"
@@ -49,7 +49,7 @@ CHART_URL = env("CHART_URL", required=True)
 SESSIONID = env("TV_SESSIONID", required=True)
 SESSIONID_SIGN = env("TV_SESSIONID_SIGN", "")
 SYMBOL = env("SYMBOL", "")
-INTERVAL = env("INTERVAL", "")
+INTERVAL = env("INTERVAL", "5")
 TZ_NAME = env("TZ_NAME", "Asia/Jerusalem")
 SEND_AS_FILE = env("SEND_AS_FILE", "0") == "1"
 WORK_HOURS = env("WORK_HOURS", "09:00-17:00")   # local time window, empty = always
@@ -118,12 +118,10 @@ def build_url(c):
     url = c["url"].split("?")[0]
     if not url.endswith("/"):
         url += "/"
-    params = []
-    if c["interval"]:
-        params.append(f"interval={c['interval']}")
+    params = [f"interval={c['interval']}"]
     if c["symbol"]:
         params.append(f"symbol={c['symbol']}")
-    return url + ("?" + "&".join(params) if params else "")
+    return url + "?" + "&".join(params)
 
 
 def shoot(page, chart, out_path):
@@ -207,13 +205,7 @@ def tg_text(text):
 
 def tg_send(results):
     now = datetime.now(ZoneInfo(TZ_NAME)).strftime("%d.%m %H:%M")
-    def caption(label, iv):
-        if not iv:
-            return f"{label} · {now}"
-        if iv.isdigit():
-            n = int(iv)
-            iv = f"{n // 60}h" if n >= 60 and n % 60 == 0 else f"{n}m"
-        return f"{label} · {iv} · {now}"
+    caption = lambda label, iv: f"{label} · {iv}m · {now}" if iv.isdigit() else f"{label} · {iv} · {now}"
 
     if len(results) == 1:
         path, label, iv = results[0]
