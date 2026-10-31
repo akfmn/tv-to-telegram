@@ -24,6 +24,7 @@ Optional (Variables, not secrets):
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -161,6 +162,17 @@ def take_screenshots(charts):
             cookies.append({"name": "sessionid_sign", "value": SESSIONID_SIGN,
                             "domain": ".tradingview.com", "path": "/", "secure": True, "httpOnly": True})
         ctx.add_cookies(cookies)
+
+        # Read-only robot: never save anything back to your TradingView account.
+        # Otherwise TradingView's autosave could overwrite your layout/drawings
+        # with the (older) state the robot loaded, or switch your layout's symbol.
+        def guard(route):
+            req = route.request
+            if req.method in ("POST", "PUT", "PATCH", "DELETE"):
+                return route.abort()
+            return route.continue_()
+        ctx.route(re.compile(r"savechart|charts?-storage|line_tools|drawing"), guard)
+
         page = ctx.new_page()
 
         for i, chart in enumerate(charts):
