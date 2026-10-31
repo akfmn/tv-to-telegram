@@ -8,6 +8,8 @@ on:
     - cron: "*/10 6-14 * * 1-5"
     - cron: "0 15 * * 1-5"
   workflow_dispatch:          # кнопка "Run workflow" для ручного теста
+  push:                       # тест без браузера: изменение файла .run-test
+    paths: [".run-test"]
 
 concurrency:
   group: tv-shot           # если /chart нажали несколько раз — запуски идут по очереди
@@ -45,7 +47,7 @@ jobs:
           SEND_AS_FILE: ${{ vars.SEND_AS_FILE }}
           WORK_HOURS: ${{ vars.WORK_HOURS || '09:00-17:00' }}
           WORK_DAYS: ${{ vars.WORK_DAYS || '1-5' }}
-          FORCE: ${{ github.event_name == 'workflow_dispatch' }}
+          FORCE: ${{ github.event_name != 'schedule' }}
         run: python tv_shot.py
 
       # GitHub отключает расписание, если в репозитории 60 дней нет коммитов.
