@@ -43,6 +43,8 @@ SYMBOL = env("SYMBOL", "")
 INTERVAL = env("INTERVAL", "5")
 TZ_NAME = env("TZ_NAME", "Asia/Jerusalem")
 SEND_AS_FILE = env("SEND_AS_FILE", "0") == "1"
+WORK_HOURS = env("WORK_HOURS", "09:00-17:00")   # local time window, empty = always
+FORCE = env("FORCE", "false") == "true"          # manual run: ignore the window
 
 TG_API = f"https://api.telegram.org/bot{TG_TOKEN}"
 OUT = "chart.png"
@@ -126,7 +128,23 @@ def take_screenshot():
         return title
 
 
+def in_work_hours():
+    """True if now (in TZ_NAME) is inside WORK_HOURS.
+    9 minutes of grace after the end, because GitHub often starts
+    scheduled runs a few minutes late (so the 17:00 shot still goes out)."""
+    if FORCE or not WORK_HOURS:
+        return True
+    start_s, end_s = WORK_HOURS.split("-")
+    to_min = lambda s: int(s.split(":")[0]) * 60 + int(s.split(":")[1])
+    now = datetime.now(ZoneInfo(TZ_NAME))
+    m = now.hour * 60 + now.minute
+    return to_min(start_s) <= m <= to_min(end_s) + 9
+
+
 def main():
+    if not in_work_hours():
+        print(f"Outside {WORK_HOURS} ({TZ_NAME}) - nothing to send.")
+        return
     try:
         title = take_screenshot()
     except Exception as e:

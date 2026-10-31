@@ -2,7 +2,11 @@ name: TradingView screenshot
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # каждые 30 минут
+    # Каждые 10 минут. Время в cron — UTC, поэтому берём запас под летнее
+    # и зимнее время Израиля; точное окно 09:00–17:00 (Иерусалим)
+    # проверяет сам скрипт (WORK_HOURS), лишние запуски ничего не шлют.
+    - cron: "*/10 6-14 * * *"
+    - cron: "0 15 * * *"
   workflow_dispatch:          # кнопка "Run workflow" для ручного теста
 
 permissions:
@@ -35,6 +39,8 @@ jobs:
           INTERVAL: ${{ vars.INTERVAL }}
           TZ_NAME: ${{ vars.TZ_NAME }}
           SEND_AS_FILE: ${{ vars.SEND_AS_FILE }}
+          WORK_HOURS: ${{ vars.WORK_HOURS || '09:00-17:00' }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' }}
         run: python tv_shot.py
 
       # GitHub отключает расписание, если в репозитории 60 дней нет коммитов.
