@@ -2,11 +2,11 @@ name: TradingView screenshot
 
 on:
   schedule:
-    # Каждые 10 минут. Время в cron — UTC, поэтому берём запас под летнее
-    # и зимнее время Израиля; точное окно 09:00–17:00 (Иерусалим)
-    # проверяет сам скрипт (WORK_HOURS), лишние запуски ничего не шлют.
-    - cron: "*/10 6-14 * * *"
-    - cron: "0 15 * * *"
+    # Каждые 10 минут, пн–пт. Время в cron — UTC, поэтому берём запас под летнее
+    # и зимнее время Израиля; точное окно 09:00–17:00 (Иерусалим) и дни
+    # проверяет сам скрипт (WORK_HOURS, WORK_DAYS), лишние запуски ничего не шлют.
+    - cron: "*/10 6-14 * * 1-5"
+    - cron: "0 15 * * 1-5"
   workflow_dispatch:          # кнопка "Run workflow" для ручного теста
 
 permissions:
@@ -15,7 +15,7 @@ permissions:
 jobs:
   shot:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
@@ -40,6 +40,7 @@ jobs:
           TZ_NAME: ${{ vars.TZ_NAME }}
           SEND_AS_FILE: ${{ vars.SEND_AS_FILE }}
           WORK_HOURS: ${{ vars.WORK_HOURS || '09:00-17:00' }}
+          WORK_DAYS: ${{ vars.WORK_DAYS || '1-5' }}
           FORCE: ${{ github.event_name == 'workflow_dispatch' }}
         run: python tv_shot.py
 
