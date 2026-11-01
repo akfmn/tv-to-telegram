@@ -19,6 +19,7 @@ Optional (Variables, not secrets):
   TZ_NAME             - default Asia/Jerusalem
   WORK_HOURS          - default 09:00-17:00 (local time), empty = any time
   WORK_DAYS           - default 1-5 (1=Mon ... 7=Sun), e.g. "1-5" or "7,1,2,3,4"
+  VIEW_HOURS          - default 24: picture always shows exactly the last 24 hours (0 = as saved)
   SEND_AS_FILE        - "1" = send as files (full quality), otherwise as photos
 """
 
@@ -54,6 +55,7 @@ TZ_NAME = env("TZ_NAME", "Asia/Jerusalem")
 SEND_AS_FILE = env("SEND_AS_FILE", "0") == "1"
 WORK_HOURS = env("WORK_HOURS", "09:00-17:00")   # local time window, empty = always
 WORK_DAYS = env("WORK_DAYS", "1-5")             # 1=Mon ... 7=Sun, empty = every day
+VIEW_HOURS = float(env("VIEW_HOURS", "24"))      # always show exactly the last N hours (0 = as saved)
 FORCE = env("FORCE", "false") == "true"          # manual run: ignore the window
 
 TG_API = f"https://api.telegram.org/bot{TG_TOKEN}"
@@ -124,6 +126,39 @@ def build_url(c):
     return url + "?" + "&".join(params)
 
 
+SET_VIEW_JS = """
+async (hours) => {
+  const api = window.TradingViewApi;
+  if (!api || !api.activeChart) return 'no TradingViewApi';
+  const ch = api.activeChart();
+  const to = Math.floor(Date.now() / 1000);
+  const range = { from: to - Math.round(hours * 3600), to: to };
+  try { await ch.setVisibleRange(range, { percentRightMargin: 3 }); }
+  catch (e) { await ch.setVisibleRange(range); }
+  await new Promise(r => setTimeout(r, 1500));
+  const v = ch.getVisibleRange ? ch.getVisibleRange() : null;
+  return v ? ('ok ' + ((v.to - v.from) / 3600).toFixed(1) + 'h') : 'ok';
+}
+"""
+
+
+def set_view(page):
+    """Fixed zoom: the last VIEW_HOURS hours, no matter how you scrolled/zoomed."""
+    for _ in range(10):  # API appears a moment after the chart
+        try:
+            if page.evaluate("() => !!(window.TradingViewApi && window.TradingViewApi.activeChart)"):
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    try:
+        res = page.evaluate(SET_VIEW_JS, VIEW_HOURS)
+    except Exception as e:
+        res = f"error {e}"
+    print(f"::notice::set_view -> {res}")
+    time.sleep(1)
+
+
 def shoot(page, chart, out_path):
     page.goto(build_url(chart), wait_until="domcontentloaded", timeout=60000)
     page.wait_for_selector("canvas", timeout=60000)
@@ -132,6 +167,8 @@ def shoot(page, chart, out_path):
         page.keyboard.press("Escape")
         time.sleep(0.3)
     page.mouse.move(5, 5)  # move cursor away so no crosshair on chart
+    if VIEW_HOURS > 0:
+        set_view(page)
     # Hide floating toolbars over the chart (favorite drawing tools etc.)
     page.add_style_tag(content=".tv-floating-toolbar{display:none !important}")
     time.sleep(0.3)
