@@ -127,17 +127,28 @@ def build_url(c):
 
 
 SET_VIEW_JS = """
-async (hours) => {
+async ([hours, fallbackInterval]) => {
   const api = window.TradingViewApi;
   if (!api || !api.activeChart) return 'no TradingViewApi';
   const ch = api.activeChart();
-  const to = Math.floor(Date.now() / 1000);
-  const range = { from: to - Math.round(hours * 3600), to: to };
-  try { await ch.setVisibleRange(range, { percentRightMargin: 3 }); }
-  catch (e) { await ch.setVisibleRange(range); }
-  await new Promise(r => setTimeout(r, 1500));
+  const val = v => (v && typeof v === 'object' && typeof v.value === 'function') ? v.value() : v;
+  // bar size in minutes
+  let res = String((ch.resolution && ch.resolution()) || fallbackInterval || '5').toUpperCase();
+  let mins = /^\\d+$/.test(res) ? +res
+           : /^\\d*S$/.test(res) ? (parseInt(res) || 1) / 60
+           : /^\\d*D$/.test(res) ? (parseInt(res) || 1) * 1440
+           : /^\\d*W$/.test(res) ? (parseInt(res) || 1) * 10080 : 5;
+  const bars = Math.max(10, Math.round(hours * 60 / mins));
+  const w = ch._chartWidget || (ch.chartWidget && ch.chartWidget());
+  const ts = w.model().timeScale();
+  const width = val(ts.width());
+  const spacing = width / (bars + 4);            // +4 bars of empty space on the right
+  ts.setBarSpacing(spacing);
+  ts.scrollToRealtime();
+  await new Promise(r => setTimeout(r, 1200));
   const v = ch.getVisibleRange ? ch.getVisibleRange() : null;
-  return v ? ('ok ' + ((v.to - v.from) / 3600).toFixed(1) + 'h') : 'ok';
+  return 'res=' + res + ' bars=' + bars + ' spacing=' + spacing.toFixed(2) +
+         (v ? ' shown=' + ((v.to - v.from) / 3600).toFixed(1) + 'h' : '');
 }
 """
 
@@ -151,27 +162,8 @@ def set_view(page):
         except Exception:
             pass
         time.sleep(1)
-    if os.environ.get("PROBE"):
-        try:
-            info = page.evaluate("""() => {
-              const out = [];
-              const api = window.TradingViewApi; const ch = api.activeChart();
-              const names = o => { const s = new Set(); let p = o; for (let i=0;i<3&&p;i++){ Object.getOwnPropertyNames(p).forEach(n=>s.add(n)); p=Object.getPrototypeOf(p);} return [...s]; };
-              out.push('CH: ' + names(ch).filter(n=>/range|scroll|bar|time|zoom|spacing|offset|widget|model/i.test(n)).join(','));
-              const w = ch._chartWidget || ch._chartWidgetWV && ch._chartWidgetWV.value && ch._chartWidgetWV.value();
-              out.push('W: ' + (w ? names(w).filter(n=>/model|time|scale|width|bar/i.test(n)).slice(0,40).join(',') : 'none'));
-              try { const m = w.model(); out.push('M: ' + names(m).filter(n=>/time|scale|bar/i.test(n)).slice(0,40).join(','));
-                const ts = (m.timeScale ? m.timeScale() : m.model().timeScale());
-                out.push('TS: ' + names(ts).filter(n=>/bar|spacing|offset|width|scroll|visible|range|zoom/i.test(n)).slice(0,60).join(','));
-              } catch(e) { out.push('M err ' + e); }
-              return out.join(' | ');
-            }""")
-        except Exception as e:
-            info = f"probe error {e}"
-        for i in range(0, len(info), 900):
-            print(f"::notice::PROBE {info[i:i+900]}")
     try:
-        res = page.evaluate(SET_VIEW_JS, VIEW_HOURS)
+        res = page.evaluate(SET_VIEW_JS, [VIEW_HOURS, INTERVAL])
     except Exception as e:
         res = f"error {e}"
     print(f"::notice::set_view -> {res}")
