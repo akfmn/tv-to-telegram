@@ -151,6 +151,25 @@ def set_view(page):
         except Exception:
             pass
         time.sleep(1)
+    if os.environ.get("PROBE"):
+        try:
+            info = page.evaluate("""() => {
+              const out = [];
+              const api = window.TradingViewApi; const ch = api.activeChart();
+              const names = o => { const s = new Set(); let p = o; for (let i=0;i<3&&p;i++){ Object.getOwnPropertyNames(p).forEach(n=>s.add(n)); p=Object.getPrototypeOf(p);} return [...s]; };
+              out.push('CH: ' + names(ch).filter(n=>/range|scroll|bar|time|zoom|spacing|offset|widget|model/i.test(n)).join(','));
+              const w = ch._chartWidget || ch._chartWidgetWV && ch._chartWidgetWV.value && ch._chartWidgetWV.value();
+              out.push('W: ' + (w ? names(w).filter(n=>/model|time|scale|width|bar/i.test(n)).slice(0,40).join(',') : 'none'));
+              try { const m = w.model(); out.push('M: ' + names(m).filter(n=>/time|scale|bar/i.test(n)).slice(0,40).join(','));
+                const ts = (m.timeScale ? m.timeScale() : m.model().timeScale());
+                out.push('TS: ' + names(ts).filter(n=>/bar|spacing|offset|width|scroll|visible|range|zoom/i.test(n)).slice(0,60).join(','));
+              } catch(e) { out.push('M err ' + e); }
+              return out.join(' | ');
+            }""")
+        except Exception as e:
+            info = f"probe error {e}"
+        for i in range(0, len(info), 900):
+            print(f"::notice::PROBE {info[i:i+900]}")
     try:
         res = page.evaluate(SET_VIEW_JS, VIEW_HOURS)
     except Exception as e:
