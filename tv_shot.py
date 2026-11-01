@@ -56,6 +56,7 @@ SEND_AS_FILE = env("SEND_AS_FILE", "0") == "1"
 WORK_HOURS = env("WORK_HOURS", "09:00-17:00")   # local time window, empty = always
 WORK_DAYS = env("WORK_DAYS", "1-5")             # 1=Mon ... 7=Sun, empty = every day
 VIEW_HOURS = float(env("VIEW_HOURS", "24"))      # always show exactly the last N hours (0 = as saved)
+WATERMARK = env("WATERMARK", "1") != "0"         # big currency code in the top-right corner
 FORCE = env("FORCE", "false") == "true"          # manual run: ignore the window
 
 TG_API = f"https://api.telegram.org/bot{TG_TOKEN}"
@@ -170,6 +171,58 @@ def set_view(page):
     time.sleep(1)
 
 
+QUOTES = ("USDT", "USDC", "BUSD", "USD", "EUR", "BTC")
+
+
+def watermark_text(symbol):
+    """OANDA:EURUSD -> EUR, FX:GBPUSD -> GBP, BINANCE:BTCUSDT -> BTC, NASDAQ:AAPL -> AAPL."""
+    t = symbol.split(":")[-1].upper().replace("/", "")
+    t = re.sub(r"[^A-Z0-9]", "", t)
+    if len(t) == 6 and t.isalpha():          # forex pair: first currency
+        return t[:3]
+    for q in QUOTES:                          # crypto pair: strip the quote currency
+        if len(t) > len(q) + 1 and t.endswith(q):
+            return t[: -len(q)]
+    return t
+
+
+ADD_WATERMARK_JS = """
+(text) => {
+  document.querySelectorAll('.tg-watermark').forEach(e => e.remove());
+  const host = document.querySelector('.chart-markup-table.pane .chart-gui-wrapper')
+            || document.querySelector('.layout__area--center');
+  if (!host) return 'no host';
+  if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+  const d = document.createElement('div');
+  d.className = 'tg-watermark';
+  d.textContent = text;
+  d.style.cssText = 'position:absolute;top:10px;right:16px;z-index:9999;pointer-events:none;' +
+    'font:700 52px/1 -apple-system,Segoe UI,Roboto,Arial,sans-serif;letter-spacing:2px;' +
+    'color:rgba(255,255,255,.88);text-shadow:0 0 3px rgba(0,0,0,.9),0 0 8px rgba(0,0,0,.6);';
+  host.appendChild(d);
+  const r = d.getBoundingClientRect();
+  return 'ok ' + text + ' at ' + Math.round(r.x) + ',' + Math.round(r.y);
+}
+"""
+
+
+def add_watermark(page, chart):
+    symbol = chart["symbol"]
+    if not symbol:  # line without a symbol -> ask the chart which one it shows
+        try:
+            symbol = page.evaluate("() => window.TradingViewApi.activeChart().symbol()") or ""
+        except Exception:
+            symbol = ""
+    text = watermark_text(symbol) if symbol else ""
+    if not text:
+        return
+    try:
+        res = page.evaluate(ADD_WATERMARK_JS, text)
+    except Exception as e:
+        res = f"error {e}"
+    print(f"::notice::watermark -> {res}")
+
+
 def shoot(page, chart, out_path):
     page.goto(build_url(chart), wait_until="domcontentloaded", timeout=60000)
     page.wait_for_selector("canvas", timeout=60000)
@@ -182,6 +235,8 @@ def shoot(page, chart, out_path):
         set_view(page)
     # Hide floating toolbars over the chart (favorite drawing tools etc.)
     page.add_style_tag(content=".tv-floating-toolbar{display:none !important}")
+    if WATERMARK:
+        add_watermark(page, chart)
     time.sleep(0.3)
     area = page.locator(".layout__area--center")
     if area.count() > 0:
