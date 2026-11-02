@@ -10,6 +10,7 @@
  *     /settings            -> period (minutes) and range (hours) with buttons
  *     /period 15           -> send every 15 minutes
  *     /range 12            -> show the last 12 hours on the chart
+ *     /hours 8-18          -> automatic sending only between 08:00 and 18:00 (Jerusalem)
  *
  * Secrets:   TG_TOKEN, GH_TOKEN, ALLOWED_CHAT_ID
  * Variables: SYMBOLS (buttons), DEFAULT_EXCHANGE (default OANDA)
@@ -18,9 +19,11 @@
 
 const GH_REPO = "akfmn/tv-to-telegram";
 const GH_WORKFLOW = "shot.yml";
-const DEFAULTS = { period: 10, range: 24 };          // minutes, hours
+const DEFAULTS = { period: 10, range: 24, from: 9, to: 17 }; // minutes, hours, work hours
 const PERIODS = [5, 10, 15, 30, 60];
 const RANGES = [4, 8, 12, 24, 48];
+const STARTS = [6, 7, 8, 9, 10, 11, 12];
+const ENDS = [14, 15, 16, 17, 18, 20, 23];
 
 export default {
   // ---- alarm clock (runs every minute) ----------------------------------
@@ -139,8 +142,11 @@ function fmtHours(h) {
   return h >= 24 && h % 24 === 0 ? `${h / 24} ${h === 24 ? "сутки" : "суток"}` : `${h} ч`;
 }
 
+const hh = (h) => String(Math.floor(h)).padStart(2, "0") + ":" + String(Math.round((h % 1) * 60)).padStart(2, "0");
+const workHours = (s) => `${hh(s.from)}-${hh(s.to)}`;
+
 function settingsText(s) {
-  return `⚙️ Настройки\n\n⏱ Период отправки: каждые ${s.period} мин\n📏 Охват графика: последние ${fmtHours(s.range)}\n\nМожно и текстом: /period 15 или /range 12`;
+  return `⚙️ Настройки\n\n⏱ Период отправки: каждые ${s.period} мин\n📏 Охват графика: последние ${fmtHours(s.range)}\n🕘 Автоотправка: с ${hh(s.from)} до ${hh(s.to)}, пн–пт\n\nМожно и текстом: /period 15, /range 12, /hours 8-18`;
 }
 
 function settingsKeyboard(s) {
@@ -151,6 +157,10 @@ function settingsKeyboard(s) {
       PERIODS.map((p) => ({ text: mark(p, s.period), callback_data: "per:" + p })),
       [{ text: "📏 Охват, часов:", callback_data: "noop" }],
       RANGES.map((r) => ({ text: mark(r, s.range), callback_data: "rng:" + r })),
+      [{ text: "🕘 Начало автоотправки:", callback_data: "noop" }],
+      STARTS.map((h) => ({ text: mark(h, s.from), callback_data: "frm:" + h })),
+      [{ text: "🕔 Конец автоотправки:", callback_data: "noop" }],
+      ENDS.map((h) => ({ text: mark(h, s.to), callback_data: "to:" + h })),
     ],
   };
 }
@@ -178,11 +188,16 @@ async function handle(update, env) {
       return;
     }
 
-    if (data.startsWith("per:") || data.startsWith("rng:")) {
-      const v = parseInt(data.slice(4), 10);
-      const s = data.startsWith("per:")
-        ? await saveSettings(env, { period: v, lastRun: 0 })   // next send right away
-        : await saveSettings(env, { range: v });
+    if (/^(per|rng|frm|to):/.test(data)) {
+      const [key, raw] = data.split(":");
+      const v = parseInt(raw, 10);
+      const cur = await getSettings(env);
+      let patch = {};
+      if (key === "per") patch = { period: v, lastRun: 0 };      // next send right away
+      if (key === "rng") patch = { range: v };
+      if (key === "frm") patch = { from: v, to: Math.max(cur.to, v + 1) };
+      if (key === "to") patch = { to: v, from: Math.min(cur.from, v - 1) };
+      const s = await saveSettings(env, patch);
       await ack("Сохранено");
       await tg(env, "editMessageText", {
         chat_id: chatId, message_id: q.message.message_id,
@@ -205,6 +220,15 @@ async function handle(update, env) {
 
   if (cmd === "/settings" || cmd === "/start") {
     const s = await getSettings(env);
+    return send(settingsText(s), { reply_markup: settingsKeyboard(s) });
+  }
+
+  if (cmd === "/hours") {
+    const m = /^(\d{1,2})(?::(\d{2}))?\s*[-–]\s*(\d{1,2})(?::(\d{2}))?$/.exec(parts.slice(1).join(" "));
+    if (!m) return send("Напиши часы, например: /hours 8-18 или /hours 8:30-17:30");
+    const from = +m[1] + (m[2] ? +m[2] / 60 : 0), to = +m[3] + (m[4] ? +m[4] / 60 : 0);
+    if (from >= to || to > 24) return send("Начало должно быть раньше конца, например: /hours 8-18");
+    const s = await saveSettings(env, { from, to });
     return send(settingsText(s), { reply_markup: settingsKeyboard(s) });
   }
 
@@ -247,7 +271,7 @@ async function runWorkflow(env, force, symbols = "") {
       },
       body: JSON.stringify({
         ref: "main",
-        inputs: { force: force ? "true" : "false", symbols, view_hours: String(s.range) },
+        inputs: { force: force ? "true" : "false", symbols, view_hours: String(s.range), work_hours: workHours(s) },
       }),
     }
   );
