@@ -26,6 +26,14 @@ const RANGES = [4, 8, 12, 24, 48];
 const STARTS = [6, 7, 8, 9, 10, 11, 12];
 const ENDS = [14, 15, 16, 17, 18, 20, 23];
 
+// Permanent buttons under the message box (no slash commands needed)
+const BTN = { chart: "📊 График", settings: "⚙️ Настройки", on: "▶️ Старт", off: "⏸ Стоп" };
+const MENU = {
+  keyboard: [[{ text: BTN.chart }, { text: BTN.settings }], [{ text: BTN.on }, { text: BTN.off }]],
+  resize_keyboard: true,
+  is_persistent: true,
+};
+
 export default {
   // ---- alarm clock (runs every minute) ----------------------------------
   async scheduled(event, env, ctx) {
@@ -46,9 +54,8 @@ export default {
       const commands = await tg(env, "setMyCommands", {
         commands: [
           { command: "chart", description: "Свежие графики прямо сейчас" },
+          { command: "menu", description: "Показать кнопки" },
           { command: "settings", description: "Старт/стоп, период, охват, часы" },
-          { command: "off", description: "Остановить автоотправку" },
-          { command: "on", description: "Включить автоотправку" },
         ],
       });
       const ok = webhook.ok && commands.ok;
@@ -223,18 +230,30 @@ async function handle(update, env) {
   if (!msg || !msg.text) return;
   if (!isAllowed(env, msg.chat.id, msg.from?.id)) return;
 
-  const parts = msg.text.trim().split(/\s+/);
+  const raw = msg.text.trim();
+  const alias = raw === BTN.chart ? "/chart" : raw === BTN.settings ? "/settings"
+              : raw === BTN.on ? "/on" : raw === BTN.off ? "/off" : null;
+  const parts = (alias || raw).split(/\s+/);
   const cmd = parts[0].split("@")[0].toLowerCase();
   const send = (t, extra = {}) => tg(env, "sendMessage", { chat_id: msg.chat.id, text: t, ...extra });
 
-  if (cmd === "/settings" || cmd === "/start") {
+  if (cmd === "/start" || cmd === "/menu") {
+    // show the permanent button panel, then the settings
+    await send("Кнопки внизу: 📊 График — прислать сейчас, ⚙️ Настройки, ▶️ Старт / ⏸ Стоп — автоотправка.", { reply_markup: MENU });
+    const s = await getSettings(env);
+    return send(settingsText(s), { reply_markup: settingsKeyboard(s) });
+  }
+
+  if (cmd === "/settings") {
     const s = await getSettings(env);
     return send(settingsText(s), { reply_markup: settingsKeyboard(s) });
   }
 
   if (cmd === "/on" || cmd === "/off") {
     const s = await saveSettings(env, { enabled: cmd === "/on", lastRun: 0 });
-    return send(settingsText(s), { reply_markup: settingsKeyboard(s) });
+    return send(cmd === "/on"
+      ? `▶️ Автоотправка включена: каждые ${s.period} мин, с ${hh(s.from)} до ${hh(s.to)}, пн–пт. Первый график уже делаю.`
+      : "⏸ Автоотправка остановлена. 📊 График по кнопке работает как обычно.");
   }
 
   if (cmd === "/hours") {
