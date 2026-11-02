@@ -153,7 +153,7 @@ async ([hours, fallbackInterval]) => {
   const spacing = width / (bars + 4);            // +4 bars of empty space on the right
   ts.setBarSpacing(spacing);
   ts.scrollToRealtime();
-  await new Promise(r => setTimeout(r, 1200));
+  await new Promise(r => setTimeout(r, 600));
   const v = ch.getVisibleRange ? ch.getVisibleRange() : null;
   return 'res=' + res + ' bars=' + bars + ' spacing=' + spacing.toFixed(2) +
          (v ? ' shown=' + ((v.to - v.from) / 3600).toFixed(1) + 'h' : '');
@@ -175,7 +175,7 @@ def set_view(page):
     except Exception as e:
         res = f"error {e}"
     print(f"::notice::set_view -> {res}")
-    time.sleep(1)
+    time.sleep(0.4)
 
 
 QUOTES = ("USDT", "USDC", "BUSD", "USD", "EUR", "BTC")
@@ -259,21 +259,22 @@ def wait_ready(page, max_wait=45):
         if st and not st["loading"]:
             if st["studies"] != last:
                 last, stable_since = st["studies"], time.time()
-            elif time.time() - stable_since >= 4:
+            elif time.time() - stable_since >= 2:
                 break
-        time.sleep(1)
-    time.sleep(3)  # let the last indicator finish drawing
+        time.sleep(0.5)
+    time.sleep(1.5)  # let the last indicator finish drawing
     return last if last is not None else -1
 
 
-def shoot(page, chart, out_path):
-    page.goto(build_url(chart), wait_until="domcontentloaded", timeout=60000)
+def shoot(page, chart, out_path, loaded=False):
+    if not loaded:
+        page.goto(build_url(chart), wait_until="domcontentloaded", timeout=60000)
     page.wait_for_selector("canvas", timeout=60000)
     studies = wait_ready(page)
     print(f"::notice::indicators loaded = {studies}")
-    for _ in range(3):  # close pop-ups/banners
+    for _ in range(2):  # close pop-ups/banners
         page.keyboard.press("Escape")
-        time.sleep(0.3)
+        time.sleep(0.15)
     page.mouse.move(5, 5)  # move cursor away so no crosshair on chart
     if VIEW_HOURS > 0:
         set_view(page)
@@ -323,12 +324,22 @@ def take_screenshots(charts):
             return route.continue_()
         ctx.route(re.compile(r"savechart|charts?-storage|line_tools|drawing"), guard)
 
-        page = ctx.new_page()
+        # Open every chart in its own tab first so they all load in parallel
+        pages = []
+        for chart in charts:
+            pg = ctx.new_page()
+            try:
+                pg.goto(build_url(chart), wait_until="commit", timeout=60000)
+            except Exception as e:
+                print(f"::warning::goto failed, will retry: {e}")
+            pages.append(pg)
 
         for i, chart in enumerate(charts):
+            page = pages[i]
             out = f"chart_{i + 1}.png"
             try:
-                title, studies = shoot(page, chart, out)
+                page.bring_to_front()
+                title, studies = shoot(page, chart, out, loaded=True)
                 if studies == 0 and i == 0 and len(charts) > 1:
                     # First (cold) load sometimes misses the indicators - redo it once
                     print("::notice::first chart had no indicators, retrying once")
