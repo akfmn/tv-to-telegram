@@ -9,6 +9,9 @@ on:
       force:
         description: "true = отправить сейчас, игнорируя рабочие часы"
         default: "true"
+      symbols:
+        description: "Только эти инструменты через запятую (пусто = список из CHART_URL)"
+        default: ""
   push:                       # тест без браузера: изменение файла .run-test
     paths: [".run-test"]
 
@@ -52,6 +55,7 @@ jobs:
           WATERMARK: ${{ vars.WATERMARK }}
           ALBUM: ${{ vars.ALBUM }}
           FORCE: ${{ github.event_name == 'push' || inputs.force == 'true' }}
+          SYMBOLS_OVERRIDE: ${{ inputs.symbols }}
         run: python tv_shot.py
 
       # GitHub отключает расписание, если в репозитории 60 дней нет коммитов.

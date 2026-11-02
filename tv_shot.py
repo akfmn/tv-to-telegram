@@ -115,6 +115,12 @@ def parse_charts():
         charts.append({"url": url, "symbol": symbol, "interval": interval})
     if not charts:
         sys.exit("CHART_URL has no links")
+    # /chart <symbol> from Telegram: same layout (first link), only the chosen symbols
+    override = env("SYMBOLS_OVERRIDE", "")
+    if override:
+        base = charts[0]
+        charts = [{"url": base["url"], "symbol": sym.strip(), "interval": base["interval"]}
+                  for sym in override.split(",") if sym.strip()]
     return charts
 
 
