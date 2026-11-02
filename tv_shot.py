@@ -224,10 +224,47 @@ def add_watermark(page, chart):
     print(f"::notice::watermark -> {res}")
 
 
+READY_JS = """
+() => {
+  try {
+    const api = window.TradingViewApi;
+    if (!api || !api.activeChart) return null;
+    const ch = api.activeChart();
+    const studies = ch.getAllStudies ? ch.getAllStudies().length : -1;
+    let loading = false;
+    try { const m = ch.chartModel ? ch.chartModel() : null;
+          loading = !!(m && m.mainSeries && m.mainSeries().isLoading && m.mainSeries().isLoading()); } catch (e) {}
+    return { studies, loading };
+  } catch (e) { return null; }
+}
+"""
+
+
+def wait_ready(page, max_wait=45):
+    """Wait until the chart API is up, candles are loaded and the number of
+    indicators has been stable for a few seconds. Returns indicator count."""
+    t0 = time.time()
+    last, stable_since = None, None
+    while time.time() - t0 < max_wait:
+        try:
+            st = page.evaluate(READY_JS)
+        except Exception:
+            st = None
+        if st and not st["loading"]:
+            if st["studies"] != last:
+                last, stable_since = st["studies"], time.time()
+            elif time.time() - stable_since >= 4:
+                break
+        time.sleep(1)
+    time.sleep(3)  # let the last indicator finish drawing
+    return last if last is not None else -1
+
+
 def shoot(page, chart, out_path):
     page.goto(build_url(chart), wait_until="domcontentloaded", timeout=60000)
     page.wait_for_selector("canvas", timeout=60000)
-    time.sleep(10)  # let candles and indicators finish drawing
+    studies = wait_ready(page)
+    print(f"::notice::{chart['symbol'] or 'chart'}: {studies} indicators, waited for data")
     for _ in range(3):  # close pop-ups/banners
         page.keyboard.press("Escape")
         time.sleep(0.3)
@@ -244,7 +281,7 @@ def shoot(page, chart, out_path):
         area.first.screenshot(path=out_path)
     else:
         page.screenshot(path=out_path)
-    return page.title()
+    return page.title(), studies
 
 
 def take_screenshots(charts):
@@ -285,7 +322,12 @@ def take_screenshots(charts):
         for i, chart in enumerate(charts):
             out = f"chart_{i + 1}.png"
             try:
-                title = shoot(page, chart, out)
+                title, studies = shoot(page, chart, out)
+                if studies == 0 and i == 0 and len(charts) > 1:
+                    # First (cold) load sometimes misses the indicators - redo it once
+                    print("::notice::first chart had no indicators, retrying once")
+                    time.sleep(5)
+                    title, studies = shoot(page, chart, out)
                 if i == 0:
                     # Did the login work? If not, charts open without your indicators.
                     try:
