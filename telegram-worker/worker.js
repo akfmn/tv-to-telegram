@@ -11,6 +11,7 @@
  *     /period 15           -> send every 15 minutes
  *     /range 12            -> show the last 12 hours on the chart
  *     /hours 8-18          -> automatic sending only between 08:00 and 18:00 (Jerusalem)
+ *     /on  /off            -> turn automatic sending on / off (/chart always works)
  *
  * Secrets:   TG_TOKEN, GH_TOKEN, ALLOWED_CHAT_ID
  * Variables: SYMBOLS (buttons), DEFAULT_EXCHANGE (default OANDA)
@@ -19,7 +20,7 @@
 
 const GH_REPO = "akfmn/tv-to-telegram";
 const GH_WORKFLOW = "shot.yml";
-const DEFAULTS = { period: 10, range: 24, from: 9, to: 17 }; // minutes, hours, work hours
+const DEFAULTS = { period: 10, range: 24, from: 9, to: 17, enabled: true }; // minutes, hours, work hours
 const PERIODS = [5, 10, 15, 30, 60];
 const RANGES = [4, 8, 12, 24, 48];
 const STARTS = [6, 7, 8, 9, 10, 11, 12];
@@ -45,7 +46,9 @@ export default {
       const commands = await tg(env, "setMyCommands", {
         commands: [
           { command: "chart", description: "Свежие графики прямо сейчас" },
-          { command: "settings", description: "Период отправки и охват графика" },
+          { command: "settings", description: "Старт/стоп, период, охват, часы" },
+          { command: "off", description: "Остановить автоотправку" },
+          { command: "on", description: "Включить автоотправку" },
         ],
       });
       const ok = webhook.ok && commands.ok;
@@ -93,6 +96,7 @@ async function saveSettings(env, patch) {
 // called every minute; sends when `period` minutes have passed since the last send
 async function tick(env) {
   const s = await getSettings(env);
+  if (!s.enabled) return;                       // paused with the Stop button
   const now = Date.now();
   const due = !s.lastRun || now - s.lastRun >= s.period * 60000 - 20000; // 20 s tolerance
   if (!due) return;
@@ -146,13 +150,17 @@ const hh = (h) => String(Math.floor(h)).padStart(2, "0") + ":" + String(Math.rou
 const workHours = (s) => `${hh(s.from)}-${hh(s.to)}`;
 
 function settingsText(s) {
-  return `⚙️ Настройки\n\n⏱ Период отправки: каждые ${s.period} мин\n📏 Охват графика: последние ${fmtHours(s.range)}\n🕘 Автоотправка: с ${hh(s.from)} до ${hh(s.to)}, пн–пт\n\nМожно и текстом: /period 15, /range 12, /hours 8-18`;
+  const state = s.enabled ? "▶️ ВКЛЮЧЕНА" : "⏸ ОСТАНОВЛЕНА";
+  return `⚙️ Настройки\n\n🤖 Автоотправка: ${state}\n⏱ Период отправки: каждые ${s.period} мин\n📏 Охват графика: последние ${fmtHours(s.range)}\n🕘 Часы автоотправки: с ${hh(s.from)} до ${hh(s.to)}, пн–пт\n\nМожно и текстом: /period 15, /range 12, /hours 8-18, /on, /off`;
 }
 
 function settingsKeyboard(s) {
   const mark = (v, cur) => (v === cur ? `• ${v} •` : `${v}`);
   return {
     inline_keyboard: [
+      [s.enabled
+        ? { text: "⏸ Стоп — не присылать автоматически", callback_data: "en:0" }
+        : { text: "▶️ Старт — присылать автоматически", callback_data: "en:1" }],
       [{ text: "⏱ Период, минут:", callback_data: "noop" }],
       PERIODS.map((p) => ({ text: mark(p, s.period), callback_data: "per:" + p })),
       [{ text: "📏 Охват, часов:", callback_data: "noop" }],
@@ -188,11 +196,12 @@ async function handle(update, env) {
       return;
     }
 
-    if (/^(per|rng|frm|to):/.test(data)) {
+    if (/^(per|rng|frm|to|en):/.test(data)) {
       const [key, raw] = data.split(":");
       const v = parseInt(raw, 10);
       const cur = await getSettings(env);
       let patch = {};
+      if (key === "en") patch = { enabled: v === 1, lastRun: 0 };  // on start: send right away
       if (key === "per") patch = { period: v, lastRun: 0 };      // next send right away
       if (key === "rng") patch = { range: v };
       if (key === "frm") patch = { from: v, to: Math.max(cur.to, v + 1) };
@@ -220,6 +229,11 @@ async function handle(update, env) {
 
   if (cmd === "/settings" || cmd === "/start") {
     const s = await getSettings(env);
+    return send(settingsText(s), { reply_markup: settingsKeyboard(s) });
+  }
+
+  if (cmd === "/on" || cmd === "/off") {
+    const s = await saveSettings(env, { enabled: cmd === "/on", lastRun: 0 });
     return send(settingsText(s), { reply_markup: settingsKeyboard(s) });
   }
 
