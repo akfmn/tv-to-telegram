@@ -284,10 +284,11 @@ def shoot(page, chart, out_path, loaded=False):
         add_watermark(page, chart)
     time.sleep(0.3)
     area = page.locator(".layout__area--center")
+    shot = {"path": out_path, "type": "jpeg", "quality": 88}  # jpeg: 5x smaller, faster upload
     if area.count() > 0:
-        area.first.screenshot(path=out_path)
+        area.first.screenshot(**shot)
     else:
-        page.screenshot(path=out_path)
+        page.screenshot(**shot)
     return page.title(), studies
 
 
@@ -336,7 +337,7 @@ def take_screenshots(charts):
 
         for i, chart in enumerate(charts):
             page = pages[i]
-            out = f"chart_{i + 1}.png"
+            out = f"chart_{i + 1}.jpg"
             try:
                 page.bring_to_front()
                 title, studies = shoot(page, chart, out, loaded=True)
@@ -380,7 +381,7 @@ def tg_send(results):
             with open(path, "rb") as f:
                 r = requests.post(f"{TG_API}/{method}",
                                   data={"chat_id": TG_CHAT_ID, "caption": caption(label, iv)},
-                                  files={field: (path, f, "image/png")}, timeout=60)
+                                  files={field: (path, f, "image/jpeg")}, timeout=60)
             if not r.ok:
                 sys.exit(f"Telegram error: {r.status_code} {r.text}")
         return
@@ -393,7 +394,7 @@ def tg_send(results):
         for j, (path, label, iv) in enumerate(chunk):
             key = f"img{j}"
             media.append({"type": kind, "media": f"attach://{key}", "caption": caption(label, iv)})
-            files[key] = (path, open(path, "rb"), "image/png")
+            files[key] = (path, open(path, "rb"), "image/jpeg")
         try:
             r = requests.post(f"{TG_API}/sendMediaGroup",
                               data={"chat_id": TG_CHAT_ID, "media": json.dumps(media)},

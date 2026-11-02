@@ -29,14 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: tv_shot.py
-
+      # ubuntu-latest already has Python 3 + pip, so no setup step is needed
       - name: Install
-        run: pip install playwright requests
+        run: pip install --quiet --disable-pip-version-check playwright requests
 
       - name: Screenshot -> Telegram
         env:
