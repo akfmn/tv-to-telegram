@@ -1,6 +1,8 @@
 /**
- * Telegram command /chart -> runs the GitHub "TradingView screenshot" workflow.
- * Deploy as a Cloudflare Worker (free). Fresh charts arrive in ~1 minute.
+ * Cloudflare Worker for the TradingView -> Telegram robot. Two jobs:
+ *   1. Alarm clock: every 10 minutes (Cron Trigger) it starts the GitHub workflow.
+ *      The workflow itself decides whether it is a working day/hour.
+ *   2. Telegram command /chart -> fresh charts right now, any time.
  *
  * Worker secrets (Settings -> Variables and Secrets, type "Secret"):
  *   TG_TOKEN         - same bot token as in GitHub
@@ -8,6 +10,8 @@
  *                      permission "Actions: Read and write"
  *   ALLOWED_CHAT_ID  - your Telegram id (same as TG_CHAT_ID); several = comma-separated
  *
+ * Cron Trigger (Settings -> Triggers -> Cron Triggers):  every 10 minutes
+ *   (the cron expression is: star-slash-10, then four stars)
  * After deploy, open once in the browser:  https://<your-worker>.workers.dev/setup
  */
 
@@ -15,6 +19,12 @@ const GH_REPO = "akfmn/tv-to-telegram";
 const GH_WORKFLOW = "shot.yml";
 
 export default {
+  // ---- alarm clock -------------------------------------------------------
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runWorkflow(env, false));
+  },
+
+  // ---- web + telegram ----------------------------------------------------
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
@@ -30,10 +40,13 @@ export default {
         commands: [{ command: "chart", description: "Свежие графики прямо сейчас" }],
       });
       const ok = webhook.ok && commands.ok;
-      return new Response(
-        ok ? "✅ Готово! Напиши боту /chart" : "❌ Ошибка:\n" + JSON.stringify({ webhook, commands }, null, 2),
-        { headers: { "content-type": "text/plain; charset=utf-8" } }
-      );
+      return text(ok ? "✅ Готово! Напиши боту /chart" : "❌ Ошибка:\n" + JSON.stringify({ webhook, commands }, null, 2));
+    }
+
+    // Manual check that the GitHub token works: opens the robot once
+    if (url.pathname === "/test") {
+      const r = await runWorkflow(env, true);
+      return text(r.ok ? "✅ GitHub запустил робота, картинки придут через ~1 минуту" : "❌ GitHub ответил " + r.status + "\n" + r.body);
     }
 
     if (url.pathname === "/telegram" && request.method === "POST") {
@@ -46,7 +59,7 @@ export default {
       return new Response("ok");
     }
 
-    return new Response("TradingView bot is running", { status: 200 });
+    return text("TradingView bot is running");
   },
 };
 
@@ -61,6 +74,15 @@ async function handle(update, env) {
   const cmd = msg.text.trim().split(/[\s@]/)[0].toLowerCase(); // "/chart@MyBot" -> "/chart"
   if (cmd !== "/chart" && cmd !== "/start") return;
 
+  const r = await runWorkflow(env, true);
+  const reply = r.ok
+    ? "⏳ Делаю свежие скриншоты, пришлю примерно через минуту"
+    : `⚠️ GitHub не запустил робота (${r.status}). Проверь GH_TOKEN в Cloudflare.\n${r.body.slice(0, 300)}`;
+  await tg(env, "sendMessage", { chat_id: msg.chat.id, text: reply });
+}
+
+// Press "Run workflow" on GitHub. force=true -> send now, ignoring working hours.
+async function runWorkflow(env, force) {
   const r = await fetch(
     `https://api.github.com/repos/${GH_REPO}/actions/workflows/${GH_WORKFLOW}/dispatches`,
     {
@@ -71,14 +93,10 @@ async function handle(update, env) {
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "tv-to-telegram-worker",
       },
-      body: JSON.stringify({ ref: "main" }),
+      body: JSON.stringify({ ref: "main", inputs: { force: force ? "true" : "false" } }),
     }
   );
-
-  const text = r.status === 204
-    ? "⏳ Делаю свежие скриншоты, пришлю примерно через минуту"
-    : `⚠️ GitHub не запустил робота (${r.status}). Проверь GH_TOKEN в Cloudflare.\n${(await r.text()).slice(0, 300)}`;
-  await tg(env, "sendMessage", { chat_id: msg.chat.id, text });
+  return { ok: r.status === 204, status: r.status, body: r.ok ? "" : await r.text() };
 }
 
 async function tg(env, method, body) {
@@ -88,6 +106,10 @@ async function tg(env, method, body) {
     body: JSON.stringify(body),
   });
   return r.json();
+}
+
+function text(s) {
+  return new Response(s, { headers: { "content-type": "text/plain; charset=utf-8" } });
 }
 
 // Webhook secret derived from the bot token (no extra setting needed)

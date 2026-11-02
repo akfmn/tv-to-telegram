@@ -1,13 +1,14 @@
 name: TradingView screenshot
 
 on:
-  schedule:
-    # Каждые 10 минут, пн–пт. Время в cron — UTC, поэтому берём запас под летнее
-    # и зимнее время Израиля; точное окно 09:00–17:00 (Иерусалим) и дни
-    # проверяет сам скрипт (WORK_HOURS, WORK_DAYS), лишние запуски ничего не шлют.
-    - cron: "*/10 6-14 * * 1-5"
-    - cron: "0 15 * * 1-5"
-  workflow_dispatch:          # кнопка "Run workflow" для ручного теста
+  # Расписание задаёт Cloudflare Worker (telegram-worker/worker.js): он каждые
+  # 10 минут дёргает этот workflow. Встроенное расписание GitHub отключено —
+  # оно опаздывало на часы и пропускало запуски.
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "true = отправить сейчас, игнорируя рабочие часы"
+        default: "true"
   push:                       # тест без браузера: изменение файла .run-test
     paths: [".run-test"]
 
@@ -50,7 +51,7 @@ jobs:
           VIEW_HOURS: ${{ vars.VIEW_HOURS || '24' }}
           WATERMARK: ${{ vars.WATERMARK }}
           ALBUM: ${{ vars.ALBUM }}
-          FORCE: ${{ github.event_name != 'schedule' }}
+          FORCE: ${{ github.event_name == 'push' || inputs.force == 'true' }}
         run: python tv_shot.py
 
       # GitHub отключает расписание, если в репозитории 60 дней нет коммитов.
