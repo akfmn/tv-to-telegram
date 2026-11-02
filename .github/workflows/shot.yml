@@ -12,6 +12,9 @@ on:
       symbols:
         description: "Только эти инструменты через запятую (пусто = список из CHART_URL)"
         default: ""
+      view_hours:
+        description: "Сколько последних часов показать на графике (пусто = настройка VIEW_HOURS)"
+        default: ""
   push:                       # тест без браузера: изменение файла .run-test
     paths: [".run-test"]
 
@@ -46,7 +49,7 @@ jobs:
           SEND_AS_FILE: ${{ vars.SEND_AS_FILE }}
           WORK_HOURS: ${{ vars.WORK_HOURS || '09:00-17:00' }}
           WORK_DAYS: ${{ vars.WORK_DAYS || '1-5' }}
-          VIEW_HOURS: ${{ vars.VIEW_HOURS || '24' }}
+          VIEW_HOURS: ${{ inputs.view_hours || vars.VIEW_HOURS || '24' }}
           WATERMARK: ${{ vars.WATERMARK }}
           ALBUM: ${{ vars.ALBUM }}
           FORCE: ${{ github.event_name == 'push' || inputs.force == 'true' }}
