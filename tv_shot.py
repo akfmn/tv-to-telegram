@@ -264,7 +264,7 @@ def shoot(page, chart, out_path):
     page.goto(build_url(chart), wait_until="domcontentloaded", timeout=60000)
     page.wait_for_selector("canvas", timeout=60000)
     studies = wait_ready(page)
-    print(f"::notice::{chart['symbol'] or 'chart'}: {studies} indicators, waited for data")
+    print(f"::notice::indicators loaded = {studies}")
     for _ in range(3):  # close pop-ups/banners
         page.keyboard.press("Escape")
         time.sleep(0.3)
