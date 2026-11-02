@@ -14,7 +14,9 @@
  *     /on  /off            -> turn automatic sending on / off (/chart always works)
  *
  * Secrets:   TG_TOKEN, GH_TOKEN, ALLOWED_CHAT_ID
- * Variables: SYMBOLS (buttons), DEFAULT_EXCHANGE (default OANDA)
+ * Variables: SYMBOLS (main instruments, sent automatically by default),
+ *            EXTRA_SYMBOLS (optional instruments, off by default - toggle in /settings),
+ *            DEFAULT_EXCHANGE (default OANDA)
  * Binding:   SETTINGS - a KV namespace (remembers period / range / last run)
  */
 
@@ -107,8 +109,10 @@ async function tick(env) {
   const now = Date.now();
   const due = !s.lastRun || now - s.lastRun >= s.period * 60000 - 20000; // 20 s tolerance
   if (!due) return;
+  const symbols = activeList(env, s).join(",");
+  if (!symbols) return;                         // nothing switched on
   await saveSettings(env, { lastRun: now });
-  await runWorkflow(env, false);
+  await runWorkflow(env, false, symbols);
 }
 
 // ---------------------------------------------------------------------------
@@ -119,8 +123,16 @@ function isAllowed(env, chatId, userId) {
   return [String(chatId), String(userId ?? "")].some((id) => allowed.includes(id));
 }
 
-function symbolList(env) {
-  return String(env.SYMBOLS || "").split(",").map((x) => x.trim()).filter(Boolean);
+const splitList = (v) => String(v || "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean);
+
+function symbolList(env, s = {}) {
+  const all = [...splitList(env.SYMBOLS), ...splitList(env.EXTRA_SYMBOLS), ...(s.extra || [])];
+  return [...new Set(all)];
+}
+
+// instruments that go out automatically (main ones by default)
+function activeList(env, s) {
+  return Array.isArray(s.active) ? s.active : splitList(env.SYMBOLS);
 }
 
 function normalize(env, raw) {
@@ -139,13 +151,14 @@ function shortName(symbol) {
   return t;
 }
 
-function chartKeyboard(env) {
-  const syms = symbolList(env);
+function chartKeyboard(env, s) {
+  const syms = symbolList(env, s);
+  const act = activeList(env, s);
   const rows = [];
   for (let i = 0; i < syms.length; i += 3) {
-    rows.push(syms.slice(i, i + 3).map((s) => ({ text: shortName(s), callback_data: "sym:" + s })));
+    rows.push(syms.slice(i, i + 3).map((x) => ({ text: (act.includes(x) ? "" : "· ") + shortName(x), callback_data: "sym:" + x })));
   }
-  rows.push([{ text: "📊 Все графики", callback_data: "sym:*" }]);
+  rows.push([{ text: "📊 Все включённые", callback_data: "sym:*" }]);
   return { inline_keyboard: rows };
 }
 
@@ -156,15 +169,24 @@ function fmtHours(h) {
 const hh = (h) => String(Math.floor(h)).padStart(2, "0") + ":" + String(Math.round((h % 1) * 60)).padStart(2, "0");
 const workHours = (s) => `${hh(s.from)}-${hh(s.to)}`;
 
-function settingsText(s) {
+function settingsText(env, s) {
   const state = s.enabled ? "▶️ ВКЛЮЧЕНА" : "⏸ ОСТАНОВЛЕНА";
-  return `⚙️ Настройки\n\n🤖 Автоотправка: ${state}\n⏱ Период отправки: каждые ${s.period} мин\n📏 Охват графика: последние ${fmtHours(s.range)}\n🕘 Часы автоотправки: с ${hh(s.from)} до ${hh(s.to)}, пн–пт\n\nМожно и текстом: /period 15, /range 12, /hours 8-18, /on, /off`;
+  const act = activeList(env, s).map(shortName).join(", ") || "ничего не выбрано";
+  return `⚙️ Настройки\n\n🤖 Автоотправка: ${state}\n📈 Инструменты: ${act}\n⏱ Период отправки: каждые ${s.period} мин\n📏 Охват графика: последние ${fmtHours(s.range)}\n🕘 Часы автоотправки: с ${hh(s.from)} до ${hh(s.to)}, пн–пт\n\nТекстом: /period 15, /range 12, /hours 8-18, /add usdjpy, /del usdjpy`;
 }
 
-function settingsKeyboard(s) {
+function settingsKeyboard(env, s) {
   const mark = (v, cur) => (v === cur ? `• ${v} •` : `${v}`);
+  const syms = symbolList(env, s);
+  const act = activeList(env, s);
+  const symRows = [];
+  for (let i = 0; i < syms.length; i += 4) {
+    symRows.push(syms.slice(i, i + 4).map((x) => ({ text: (act.includes(x) ? "✅ " : "⬜ ") + shortName(x), callback_data: "tog:" + x })));
+  }
   return {
     inline_keyboard: [
+      [{ text: "📈 Присылать автоматически:", callback_data: "noop" }],
+      ...symRows,
       [s.enabled
         ? { text: "⏸ Стоп — не присылать автоматически", callback_data: "en:0" }
         : { text: "▶️ Старт — присылать автоматически", callback_data: "en:1" }],
@@ -191,10 +213,26 @@ async function handle(update, env) {
     if (!isAllowed(env, chatId, q.from?.id)) return ack();
     const data = String(q.data || "");
 
+    if (data.startsWith("tog:")) {
+      const cur = await getSettings(env);
+      const sym = data.slice(4);
+      const act = activeList(env, cur);
+      const next = act.includes(sym) ? act.filter((x) => x !== sym) : [...act, sym];
+      const s = await saveSettings(env, { active: next });
+      await ack(act.includes(sym) ? shortName(sym) + " выключен" : shortName(sym) + " включён");
+      await tg(env, "editMessageText", {
+        chat_id: chatId, message_id: q.message.message_id,
+        text: settingsText(env, s), reply_markup: settingsKeyboard(env, s),
+      });
+      return;
+    }
+
     if (data.startsWith("sym:")) {
-      const symbols = data === "sym:*" ? "" : data.slice(4);
+      const cur = await getSettings(env);
+      const symbols = data === "sym:*" ? activeList(env, cur).join(",") : data.slice(4);
+      if (!symbols) return ack("Нет включённых инструментов");
       const r = await runWorkflow(env, true, symbols);
-      const label = symbols ? shortName(symbols) : "все графики";
+      const label = data === "sym:*" ? "все включённые" : shortName(symbols);
       await ack(r.ok ? "⏳ Делаю " + label : "Ошибка " + r.status);
       await tg(env, "editMessageText", {
         chat_id: chatId, message_id: q.message.message_id,
@@ -217,7 +255,7 @@ async function handle(update, env) {
       await ack("Сохранено");
       await tg(env, "editMessageText", {
         chat_id: chatId, message_id: q.message.message_id,
-        text: settingsText(s), reply_markup: settingsKeyboard(s),
+        text: settingsText(env, s), reply_markup: settingsKeyboard(env, s),
       });
       return;
     }
@@ -241,12 +279,24 @@ async function handle(update, env) {
     // show the permanent button panel, then the settings
     await send("Кнопки внизу: 📊 График — прислать сейчас, ⚙️ Настройки, ▶️ Старт / ⏸ Стоп — автоотправка.", { reply_markup: MENU });
     const s = await getSettings(env);
-    return send(settingsText(s), { reply_markup: settingsKeyboard(s) });
+    return send(settingsText(env, s), { reply_markup: settingsKeyboard(env, s) });
   }
 
   if (cmd === "/settings") {
     const s = await getSettings(env);
-    return send(settingsText(s), { reply_markup: settingsKeyboard(s) });
+    return send(settingsText(env, s), { reply_markup: settingsKeyboard(env, s) });
+  }
+
+  if (cmd === "/add" || cmd === "/del") {
+    const sym = normalize(env, parts[1] || "");
+    if (!sym) return send(cmd === "/add" ? "Напиши инструмент, например: /add usdjpy" : "Напиши инструмент, например: /del usdjpy");
+    const cur = await getSettings(env);
+    const extra = (cur.extra || []).filter((x) => x !== sym);
+    const act = activeList(env, cur).filter((x) => x !== sym);
+    const s = cmd === "/add"
+      ? await saveSettings(env, { extra: [...extra, sym], active: [...act, sym] })
+      : await saveSettings(env, { extra, active: act });
+    return send(settingsText(env, s), { reply_markup: settingsKeyboard(env, s) });
   }
 
   if (cmd === "/on" || cmd === "/off") {
@@ -262,7 +312,7 @@ async function handle(update, env) {
     const from = +m[1] + (m[2] ? +m[2] / 60 : 0), to = +m[3] + (m[4] ? +m[4] / 60 : 0);
     if (from >= to || to > 24) return send("Начало должно быть раньше конца, например: /hours 8-18");
     const s = await saveSettings(env, { from, to });
-    return send(settingsText(s), { reply_markup: settingsKeyboard(s) });
+    return send(settingsText(env, s), { reply_markup: settingsKeyboard(env, s) });
   }
 
   if (cmd === "/period" || cmd === "/range") {
@@ -273,14 +323,15 @@ async function handle(update, env) {
       return send(isPeriod ? "Напиши число минут, например: /period 15" : "Напиши число часов, например: /range 12");
     }
     const s = isPeriod ? await saveSettings(env, { period: v, lastRun: 0 }) : await saveSettings(env, { range: v });
-    return send(settingsText(s), { reply_markup: settingsKeyboard(s) });
+    return send(settingsText(env, s), { reply_markup: settingsKeyboard(env, s) });
   }
 
   if (cmd !== "/chart") return;
 
   const wanted = parts.slice(1).map((p) => normalize(env, p)).filter(Boolean);
   if (wanted.length === 0) {
-    return send("Какой график прислать?\nИли напиши, например: /chart usdjpy", { reply_markup: chartKeyboard(env) });
+    const s = await getSettings(env);
+    return send("Какой график прислать?\nИли напиши, например: /chart usdjpy", { reply_markup: chartKeyboard(env, s) });
   }
   const r = await runWorkflow(env, true, wanted.join(","));
   const names = wanted.map(shortName).join(", ");
