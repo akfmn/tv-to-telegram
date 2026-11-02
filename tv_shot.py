@@ -148,6 +148,22 @@ async ([hours, fallbackInterval]) => {
            : /^\\d*W$/.test(res) ? (parseInt(res) || 1) * 10080 : 5;
   const bars = Math.max(10, Math.round(hours * 60 / mins));
   const w = ch._chartWidget || (ch.chartWidget && ch.chartWidget());
+  // 1) Reset scales (= Alt+R): price axis back to Auto so every candle fits vertically,
+  //    even if the saved layout had the price scale dragged/zoomed by hand.
+  let reset = 'no';
+  try { if (w.GUIResetScales) { w.GUIResetScales(); reset = 'gui'; } } catch (e) { reset = 'err ' + e.message; }
+  if (reset !== 'gui') {
+    try {
+      const m = w.model();
+      const mm = m.model ? m.model() : m;
+      (mm.panes ? mm.panes() : []).forEach(p => {
+        (p.leftPriceScales ? [...p.leftPriceScales(), ...p.rightPriceScales()] : [])
+          .forEach(ps => { try { m.setPriceAutoScale(ps, p, true); } catch (e) {} });
+      });
+      reset = 'panes';
+    } catch (e) { reset = 'err2 ' + e.message; }
+  }
+  // 2) Horizontal: exactly the last N hours
   const ts = w.model().timeScale();
   const width = val(ts.width());
   const spacing = width / (bars + 4);            // +4 bars of empty space on the right
@@ -155,7 +171,7 @@ async ([hours, fallbackInterval]) => {
   ts.scrollToRealtime();
   await new Promise(r => setTimeout(r, 600));
   const v = ch.getVisibleRange ? ch.getVisibleRange() : null;
-  return 'res=' + res + ' bars=' + bars + ' spacing=' + spacing.toFixed(2) +
+  return 'res=' + res + ' bars=' + bars + ' spacing=' + spacing.toFixed(2) + ' reset=' + reset +
          (v ? ' shown=' + ((v.to - v.from) / 3600).toFixed(1) + 'h' : '');
 }
 """
