@@ -49,6 +49,7 @@ jobs:
           WORK_DAYS: ${{ vars.WORK_DAYS || '1-5' }}
           VIEW_HOURS: ${{ vars.VIEW_HOURS || '24' }}
           WATERMARK: ${{ vars.WATERMARK }}
+          ALBUM: ${{ vars.ALBUM }}
           FORCE: ${{ github.event_name != 'schedule' }}
         run: python tv_shot.py
 

@@ -57,6 +57,7 @@ WORK_HOURS = env("WORK_HOURS", "09:00-17:00")   # local time window, empty = alw
 WORK_DAYS = env("WORK_DAYS", "1-5")             # 1=Mon ... 7=Sun, empty = every day
 VIEW_HOURS = float(env("VIEW_HOURS", "24"))      # always show exactly the last N hours (0 = as saved)
 WATERMARK = env("WATERMARK", "1") != "0"         # big currency code in the top-right corner
+ALBUM = env("ALBUM", "0") == "1"                 # 1 = all charts in one album; 0 = separate messages
 FORCE = env("FORCE", "false") == "true"          # manual run: ignore the window
 
 TG_API = f"https://api.telegram.org/bot{TG_TOKEN}"
@@ -313,15 +314,16 @@ def tg_send(results):
     now = datetime.now(ZoneInfo(TZ_NAME)).strftime("%d.%m %H:%M")
     caption = lambda label, iv: f"{label} · {iv}m · {now}" if iv.isdigit() else f"{label} · {iv} · {now}"
 
-    if len(results) == 1:
-        path, label, iv = results[0]
+    if len(results) == 1 or not ALBUM:
+        # One message per chart, each with its own caption underneath
         method, field = ("sendDocument", "document") if SEND_AS_FILE else ("sendPhoto", "photo")
-        with open(path, "rb") as f:
-            r = requests.post(f"{TG_API}/{method}",
-                              data={"chat_id": TG_CHAT_ID, "caption": caption(label, iv)},
-                              files={field: (path, f, "image/png")}, timeout=60)
-        if not r.ok:
-            sys.exit(f"Telegram error: {r.status_code} {r.text}")
+        for path, label, iv in results:
+            with open(path, "rb") as f:
+                r = requests.post(f"{TG_API}/{method}",
+                                  data={"chat_id": TG_CHAT_ID, "caption": caption(label, iv)},
+                                  files={field: (path, f, "image/png")}, timeout=60)
+            if not r.ok:
+                sys.exit(f"Telegram error: {r.status_code} {r.text}")
         return
 
     # Several charts -> one album (Telegram allows up to 10 per album)
