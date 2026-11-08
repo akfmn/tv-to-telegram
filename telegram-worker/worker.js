@@ -57,7 +57,7 @@ const HELP = [
   "/period 7 — период в минутах (любое число 1–1440)",
   "/range 36 — охват в часах (1–720)",
   "/hours 8:30-17:30 — часы автоотправки, можно с минутами",
-  "/add usdjpy — добавить инструмент в список (сразу включается)",
+  "/add usdjpy — добавить инструмент в список (сразу включается). Или просто словами: «добавь в рассылку биткоин», «убери из рассылки золото»",
   "/del usdjpy — убрать инструмент из списка",
   "/on и /off — то же, что кнопки Старт и Стоп",
   "/menu — показать кнопки внизу, если они пропали",
@@ -330,6 +330,36 @@ async function transcribe(env, file) {
   }
 }
 
+// "добавь в рассылку биткоин и эфир" -> { add: true, what: "биткоин и эфир" }
+function parseListEdit(raw) {
+  const t = raw.toLowerCase().replace(/ё/g, "е").trim();
+  const m = t.match(/^(добавь|добавить|добав|подключи|включи|убери|убрать|удали|удалить|отключи|выключи)\s+(.*)$/);
+  if (!m) return null;
+  const add = /^(добав|подключ|включ)/.test(m[1]);
+  // (\b does not work with Cyrillic, so word edges are spaces / string ends)
+  const what = (" " + m[2] + " ")
+    .replace(/\s(в|из|с|со)\s+(авто)?(рассылку|рассылки|рассылке|список|списка|бот|бота|боту|автоотправку|автоотправки)(?=\s)/g, " ")
+    .replace(/\s(пожалуйста|плиз|еще|тоже|также|тикер|инструмент|график|графики)(?=\s)/g, " ")
+    .replace(/\s+/g, " ").trim();
+  return what ? { add, what } : null;
+}
+
+// add or remove instruments in the list; returns [text, extra] for send()
+async function editList(env, add, symbols) {
+  const cur = await getSettings(env);
+  let extra = cur.extra || [];
+  let act = activeList(env, cur);
+  for (const sym of symbols) {
+    extra = extra.filter((x) => x !== sym);
+    act = act.filter((x) => x !== sym);
+    if (add) { extra.push(sym); act.push(sym); }
+  }
+  const s = await saveSettings(env, { extra, active: act });
+  const names = symbols.map((x) => `${shortName(x)} (${x})`).join(", ");
+  const head = add ? `✅ Добавил в рассылку: ${names}` : `🗑 Убрал из рассылки: ${names}`;
+  return [head + "\n\n" + settingsText(env, s), { reply_markup: settingsKeyboard(env, s) }];
+}
+
 // Cloudflare retires models now and then; the bot tries these in order.
 const AI_MODELS = [
   "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
@@ -468,15 +498,11 @@ async function handle(update, env) {
   }
 
   if (cmd === "/add" || cmd === "/del") {
-    const sym = normalize(env, parts[1] || "");
-    if (!sym) return send(cmd === "/add" ? "Напиши инструмент, например: /add usdjpy" : "Напиши инструмент, например: /del usdjpy");
-    const cur = await getSettings(env);
-    const extra = (cur.extra || []).filter((x) => x !== sym);
-    const act = activeList(env, cur).filter((x) => x !== sym);
-    const s = cmd === "/add"
-      ? await saveSettings(env, { extra: [...extra, sym], active: [...act, sym] })
-      : await saveSettings(env, { extra, active: act });
-    return send(settingsText(env, s), { reply_markup: settingsKeyboard(env, s) });
+    const rest = parts.slice(1).join(" ").trim();
+    if (!rest) return send(cmd === "/add" ? "Напиши инструмент, например: /add usdjpy или /add биткоин" : "Напиши инструмент, например: /del usdjpy");
+    let { symbols } = await resolveSymbols(env, rest);
+    if (!symbols.length) symbols = parts.slice(1).map((p) => normalize(env, p)).filter(Boolean);
+    return send(...(await editList(env, cmd === "/add", symbols)));
   }
 
   if (cmd === "/on" || cmd === "/off") {
@@ -508,6 +534,14 @@ async function handle(update, env) {
 
   if (cmd !== "/chart") {
     if (cmd.startsWith("/")) return;                       // unknown command - ignore
+    // "добавь в рассылку биткоин" / "убери из рассылки золото" -> edit the auto-send list
+    const edit = parseListEdit(raw);
+    if (edit) {
+      const { symbols } = await resolveSymbols(env, edit.what);
+      if (!symbols.length) return send(`Не понял, какой инструмент ${edit.add ? "добавить" : "убрать"} 🤔 Напиши, например: добавь в рассылку биткоин`);
+      return send(...(await editList(env, edit.add, symbols)));
+    }
+
     // Free text: "биткоин", "эпл и амазон", "нефть" ... -> chart(s)
     const res = await resolveSymbols(env, raw);
     console.log("resolve", JSON.stringify(res));
