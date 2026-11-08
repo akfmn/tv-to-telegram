@@ -136,6 +136,12 @@ export default {
     }
 
     // Diagnostics: is the webhook healthy, is AI attached
+    // Diagnostics: what would the bot make of this text?  /ai?q=кока кола
+    if (url.pathname === "/ai") {
+      const res = await resolveSymbols(env, url.searchParams.get("q") || "");
+      return text(JSON.stringify(res, null, 2));
+    }
+
     if (url.pathname === "/hook") {
       const info = await tg(env, "getWebhookInfo", {});
       return text(JSON.stringify({ ai: !!env.AI, webhook: info.result }, null, 2));
@@ -343,7 +349,7 @@ async function resolveSymbols(env, text) {
     const m = raw.match(/\[[\s\S]*?\]/);
     const arr = m ? JSON.parse(m[0]) : [];
     const symbols = arr.filter((x) => typeof x === "string" && /^[A-Z0-9_]{2,12}:[A-Z0-9!._]{1,20}$/.test(x)).slice(0, 5);
-    return { symbols: [...new Set(symbols)], via: "ai" };
+    return { symbols: [...new Set(symbols)], via: "ai", raw };
   } catch (e) {
     return { symbols: [], via: "ai-error " + e.message };
   }
@@ -493,7 +499,9 @@ async function handle(update, env) {
   if (cmd !== "/chart") {
     if (cmd.startsWith("/")) return;                       // unknown command - ignore
     // Free text: "биткоин", "эпл и амазон", "нефть" ... -> chart(s)
-    const { symbols } = await resolveSymbols(env, raw);
+    const res = await resolveSymbols(env, raw);
+    console.log("resolve", JSON.stringify(res));
+    const { symbols } = res;
     if (!symbols.length) {
       return send("Не понял, какой это инструмент 🤔\nНапиши название или тикер, например: биткоин, эпл, золото, нефть, NASDAQ:TSLA");
     }
