@@ -355,9 +355,8 @@ async function resolveSymbols(env, text) {
         max_tokens: 100, temperature: 0,
       });
       const raw = String(out.response ?? out.result?.response ?? "");
-      const m = raw.match(/\[[\s\S]*?\]/);
-      const arr = m ? JSON.parse(m[0]) : [];
-      const symbols = arr.filter((x) => typeof x === "string" && /^[A-Z0-9_]{2,12}:[A-Z0-9!._]{1,20}$/.test(x)).slice(0, 5);
+      // accept ["NYSE:KO"], NYSE:KO,NASDAQ:PEP, or any prose containing EXCHANGE:TICKER
+      const symbols = (raw.toUpperCase().match(/\b[A-Z0-9_]{2,12}:[A-Z0-9!._]{1,20}\b/g) || []).slice(0, 5);
       return { symbols: [...new Set(symbols)], via: "ai " + model, raw };
     } catch (e) {
       lastErr = e.message;
