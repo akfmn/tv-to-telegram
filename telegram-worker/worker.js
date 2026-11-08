@@ -125,8 +125,20 @@ export default {
         return new Response("forbidden", { status: 403 });
       }
       const update = await request.json();
-      ctx.waitUntil(handle(update, env));
+      // short line in Observability -> easy to see what came in and what the bot did
+      const m = update.message || update.edited_message;
+      console.log("tg update", JSON.stringify({
+        kind: update.callback_query ? "callback:" + update.callback_query.data : m ? (m.text ? "text" : m.voice ? "voice" : Object.keys(m).slice(-1)[0]) : Object.keys(update).join(","),
+        chat: m?.chat?.id ?? update.callback_query?.message?.chat?.id, from: m?.from?.id ?? update.callback_query?.from?.id, text: m?.text,
+      }));
+      ctx.waitUntil(handle(update, env).catch((e) => console.error("handle failed", e.stack || e.message)));
       return new Response("ok");
+    }
+
+    // Diagnostics: is the webhook healthy, is AI attached
+    if (url.pathname === "/hook") {
+      const info = await tg(env, "getWebhookInfo", {});
+      return text(JSON.stringify({ ai: !!env.AI, webhook: info.result }, null, 2));
     }
 
     return text("TradingView bot is running");
@@ -256,7 +268,7 @@ function settingsKeyboard(env, s) {
 const DICT = {
   // crypto
   "биткоин": "BINANCE:BTCUSDT", "биток": "BINANCE:BTCUSDT", "битка": "BINANCE:BTCUSDT", "битк": "BINANCE:BTCUSDT",
-  "btc": "BINANCE:BTCUSDT", "bitcoin": "BINANCE:BTCUSDT", "втс": "BINANCE:BTCUSDT",
+  "btc": "BINANCE:BTCUSDT", "bitcoin": "BINANCE:BTCUSDT", "втс": "BINANCE:BTCUSDT", "бтс": "BINANCE:BTCUSDT", "биткойн": "BINANCE:BTCUSDT", "бтц": "BINANCE:BTCUSDT",
   "эфир": "BINANCE:ETHUSDT", "эфириум": "BINANCE:ETHUSDT", "этериум": "BINANCE:ETHUSDT", "eth": "BINANCE:ETHUSDT", "ethereum": "BINANCE:ETHUSDT",
   "солана": "BINANCE:SOLUSDT", "sol": "BINANCE:SOLUSDT", "solana": "BINANCE:SOLUSDT",
   "рипл": "BINANCE:XRPUSDT", "xrp": "BINANCE:XRPUSDT", "доги": "BINANCE:DOGEUSDT", "doge": "BINANCE:DOGEUSDT", "догикоин": "BINANCE:DOGEUSDT",
@@ -295,6 +307,22 @@ Rules: crypto -> BINANCE:<COIN>USDT (bitcoin -> BINANCE:BTCUSDT). Forex -> OANDA
 oil TVC:USOIL, brent TVC:UKOIL, dollar index TVC:DXY. Indices: Nasdaq100 OANDA:NAS100USD, S&P500 OANDA:SPX500USD, Dow OANDA:US30USD, DAX OANDA:DE30EUR.
 US stocks -> NASDAQ:TICKER or NYSE:TICKER (Apple NASDAQ:AAPL, Coca-Cola NYSE:KO). Other countries -> that exchange (e.g. LSE:, XETR:, MOEX:, TSE:).
 Several instruments -> several entries. Max 5.`;
+
+// Telegram voice note (ogg/opus) -> text via Workers AI Whisper
+async function transcribe(env, file) {
+  if (!env.AI) return "";
+  try {
+    const f = await tg(env, "getFile", { file_id: file.file_id });
+    if (!f.ok) return "";
+    const r = await fetch(`https://api.telegram.org/file/bot${env.TG_TOKEN}/${f.result.file_path}`);
+    const buf = await r.arrayBuffer();
+    const out = await env.AI.run("@cf/openai/whisper", { audio: [...new Uint8Array(buf)] });
+    return String(out.text || "").trim();
+  } catch (e) {
+    console.error("transcribe failed", e.message);
+    return "";
+  }
+}
 
 async function resolveSymbols(env, text) {
   const t = text.toLowerCase().replace(/ё/g, "е");
@@ -390,15 +418,24 @@ async function handle(update, env) {
 
   // --- text ------------------------------------------------------------------
   const msg = update.message;
-  if (!msg || !msg.text) return;
+  if (!msg) return;
   if (!isAllowed(env, msg.chat.id, msg.from?.id)) return;
+  const send = (t, extra = {}) => tg(env, "sendMessage", { chat_id: msg.chat.id, text: t, ...extra });
+
+  // Voice message -> speech to text (Workers AI Whisper), then handled like typed text
+  if (msg.voice || msg.audio) {
+    const heard = await transcribe(env, msg.voice || msg.audio);
+    if (!heard) return send("🎤 Не расслышал. Скажи ещё раз или напиши текстом: биткоин, эпл, золото…");
+    msg.text = heard;
+    await send(`🎤 Услышал: «${heard}»`);
+  }
+  if (!msg.text) return;
 
   const raw = msg.text.trim();
   const alias = raw === BTN.chart ? "/chart" : raw === BTN.settings ? "/settings"
               : raw === BTN.on ? "/on" : raw === BTN.off ? "/off" : null;
   const parts = (alias || raw).split(/\s+/);
   const cmd = parts[0].split("@")[0].toLowerCase();
-  const send = (t, extra = {}) => tg(env, "sendMessage", { chat_id: msg.chat.id, text: t, ...extra });
 
   if (cmd === "/start" || cmd === "/menu") {
     // show the permanent button panel, then the settings
