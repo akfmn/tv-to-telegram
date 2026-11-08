@@ -356,7 +356,7 @@ async function resolveSymbols(env, text) {
       });
       const raw = String(out.response ?? out.result?.response ?? "");
       // accept ["NYSE:KO"], NYSE:KO,NASDAQ:PEP, or any prose containing EXCHANGE:TICKER
-      const symbols = (raw.toUpperCase().match(/\b[A-Z0-9_]{2,12}:[A-Z0-9!._]{1,20}\b/g) || []).slice(0, 5);
+      const symbols = (raw.toUpperCase().match(/\b[A-Z0-9_]{2,12}:[A-Z0-9!._]{1,20}/g) || []).map((x) => x.replace(/\.+$/, "")).slice(0, 5);
       return { symbols: [...new Set(symbols)], via: "ai " + model, raw };
     } catch (e) {
       lastErr = e.message;
