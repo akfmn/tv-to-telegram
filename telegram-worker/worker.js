@@ -330,6 +330,13 @@ async function transcribe(env, file) {
   }
 }
 
+// Cloudflare retires models now and then; the bot tries these in order.
+const AI_MODELS = [
+  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  "@cf/meta/llama-3.1-8b-instruct-fp8",
+  "@cf/meta/llama-3.2-3b-instruct",
+];
+
 async function resolveSymbols(env, text) {
   const t = text.toLowerCase().replace(/ё/g, "е");
   // 1) whole phrase in the dictionary?
@@ -340,19 +347,23 @@ async function resolveSymbols(env, text) {
   if (words.length && hits.every(Boolean)) return { symbols: [...new Set(hits)], via: "dict" };
   // 3) ask Workers AI
   if (!env.AI) return { symbols: [], via: "no-ai" };
-  try {
-    const out = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-      messages: [{ role: "system", content: AI_SYSTEM }, { role: "user", content: text }],
-      max_tokens: 100, temperature: 0,
-    });
-    const raw = String(out.response || "");
-    const m = raw.match(/\[[\s\S]*?\]/);
-    const arr = m ? JSON.parse(m[0]) : [];
-    const symbols = arr.filter((x) => typeof x === "string" && /^[A-Z0-9_]{2,12}:[A-Z0-9!._]{1,20}$/.test(x)).slice(0, 5);
-    return { symbols: [...new Set(symbols)], via: "ai", raw };
-  } catch (e) {
-    return { symbols: [], via: "ai-error " + e.message };
+  let lastErr = "";
+  for (const model of AI_MODELS) {                 // first model that works wins
+    try {
+      const out = await env.AI.run(model, {
+        messages: [{ role: "system", content: AI_SYSTEM }, { role: "user", content: text }],
+        max_tokens: 100, temperature: 0,
+      });
+      const raw = String(out.response ?? out.result?.response ?? "");
+      const m = raw.match(/\[[\s\S]*?\]/);
+      const arr = m ? JSON.parse(m[0]) : [];
+      const symbols = arr.filter((x) => typeof x === "string" && /^[A-Z0-9_]{2,12}:[A-Z0-9!._]{1,20}$/.test(x)).slice(0, 5);
+      return { symbols: [...new Set(symbols)], via: "ai " + model, raw };
+    } catch (e) {
+      lastErr = e.message;
+    }
   }
+  return { symbols: [], via: "ai-error " + lastErr };
 }
 
 // ---------------------------------------------------------------------------
