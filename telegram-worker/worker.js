@@ -17,7 +17,8 @@
  * Variables: SYMBOLS (main instruments, sent automatically by default),
  *            EXTRA_SYMBOLS (optional instruments, off by default - toggle in /settings),
  *            DEFAULT_EXCHANGE (default OANDA)
- * Binding:   SETTINGS - a KV namespace (remembers period / range / last run)
+ * Bindings:  SETTINGS - a KV namespace (remembers period / range / last run)
+ *            AI       - Workers AI (free tier) - understands "биткоин", "эпл", "нефть"...
  */
 
 const GH_REPO = "akfmn/tv-to-telegram";
@@ -46,6 +47,9 @@ const HELP = [
   "⏱ Период, минут — как часто присылать: 5, 10, 15, 30 или 60. После смены период считается заново, первый график придёт сразу.",
   "📏 Охват, часов — сколько последних часов видно на картинке: 4, 8, 12, 24 или 48. Робот сам подгоняет масштаб, чтобы влезли ровно эти часы и все свечи по высоте.",
   "🕘 Начало / 🕔 Конец автоотправки — в какие часы присылать (время Иерусалима). За пределами этих часов, а также в субботу и воскресенье, автоотправки нет.",
+  "",
+  "━━━ ПРОСТО НАПИШИ НАЗВАНИЕ ━━━",
+  "Бот понимает обычные слова: «биткоин», «эфир», «эпл», «амазон», «золото», «нефть», «насдак», «евро»… и даже несколько сразу: «эпл и тесла». Редкие названия он распознаёт через ИИ. Через ~40 секунд придёт график по нашему шаблону.",
   "",
   "━━━ ТЕКСТОВЫЕ КОМАНДЫ ━━━",
   "Нужны, когда нужного значения нет на кнопках:",
@@ -245,6 +249,78 @@ function settingsKeyboard(env, s) {
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// free text -> TradingView symbols: fast dictionary first, Workers AI for the rest
+
+const DICT = {
+  // crypto
+  "биткоин": "BINANCE:BTCUSDT", "биток": "BINANCE:BTCUSDT", "битка": "BINANCE:BTCUSDT", "битк": "BINANCE:BTCUSDT",
+  "btc": "BINANCE:BTCUSDT", "bitcoin": "BINANCE:BTCUSDT", "втс": "BINANCE:BTCUSDT",
+  "эфир": "BINANCE:ETHUSDT", "эфириум": "BINANCE:ETHUSDT", "этериум": "BINANCE:ETHUSDT", "eth": "BINANCE:ETHUSDT", "ethereum": "BINANCE:ETHUSDT",
+  "солана": "BINANCE:SOLUSDT", "sol": "BINANCE:SOLUSDT", "solana": "BINANCE:SOLUSDT",
+  "рипл": "BINANCE:XRPUSDT", "xrp": "BINANCE:XRPUSDT", "доги": "BINANCE:DOGEUSDT", "doge": "BINANCE:DOGEUSDT", "догикоин": "BINANCE:DOGEUSDT",
+  // metals / energy
+  "золото": "OANDA:XAUUSD", "gold": "OANDA:XAUUSD", "xau": "OANDA:XAUUSD", "голд": "OANDA:XAUUSD",
+  "серебро": "OANDA:XAGUSD", "silver": "OANDA:XAGUSD", "xag": "OANDA:XAGUSD",
+  "нефть": "TVC:USOIL", "oil": "TVC:USOIL", "wti": "TVC:USOIL", "брент": "TVC:UKOIL", "brent": "TVC:UKOIL", "газ": "NYMEX:NG1!",
+  // forex
+  "евро": "OANDA:EURUSD", "eur": "OANDA:EURUSD", "eurusd": "OANDA:EURUSD", "евродоллар": "OANDA:EURUSD",
+  "фунт": "OANDA:GBPUSD", "gbp": "OANDA:GBPUSD", "gbpusd": "OANDA:GBPUSD", "кабель": "OANDA:GBPUSD",
+  "йена": "OANDA:USDJPY", "иена": "OANDA:USDJPY", "jpy": "OANDA:USDJPY", "usdjpy": "OANDA:USDJPY",
+  "франк": "OANDA:USDCHF", "chf": "OANDA:USDCHF", "аусси": "OANDA:AUDUSD", "aud": "OANDA:AUDUSD", "киви": "OANDA:NZDUSD", "nzd": "OANDA:NZDUSD",
+  "канадец": "OANDA:USDCAD", "cad": "OANDA:USDCAD", "доллар": "TVC:DXY", "dxy": "TVC:DXY", "индекс доллара": "TVC:DXY",
+  // indices
+  "насдак": "OANDA:NAS100USD", "nasdaq": "OANDA:NAS100USD", "us100": "OANDA:NAS100USD", "nas100": "OANDA:NAS100USD", "ндх": "OANDA:NAS100USD",
+  "сп500": "OANDA:SPX500USD", "sp500": "OANDA:SPX500USD", "us500": "OANDA:SPX500USD", "спх": "OANDA:SPX500USD", "spx": "OANDA:SPX500USD", "s&p": "OANDA:SPX500USD",
+  "доу": "OANDA:US30USD", "dow": "OANDA:US30USD", "us30": "OANDA:US30USD", "дакс": "OANDA:DE30EUR", "dax": "OANDA:DE30EUR", "никкей": "OANDA:JP225USD",
+  // stocks
+  "эпл": "NASDAQ:AAPL", "эппл": "NASDAQ:AAPL", "apple": "NASDAQ:AAPL", "aapl": "NASDAQ:AAPL",
+  "амазон": "NASDAQ:AMZN", "amazon": "NASDAQ:AMZN", "amzn": "NASDAQ:AMZN",
+  "тесла": "NASDAQ:TSLA", "tesla": "NASDAQ:TSLA", "tsla": "NASDAQ:TSLA",
+  "майкрософт": "NASDAQ:MSFT", "microsoft": "NASDAQ:MSFT", "msft": "NASDAQ:MSFT",
+  "гугл": "NASDAQ:GOOGL", "google": "NASDAQ:GOOGL", "googl": "NASDAQ:GOOGL", "альфабет": "NASDAQ:GOOGL",
+  "нвидиа": "NASDAQ:NVDA", "nvidia": "NASDAQ:NVDA", "nvda": "NASDAQ:NVDA", "невидия": "NASDAQ:NVDA",
+  "мета": "NASDAQ:META", "meta": "NASDAQ:META", "фейсбук": "NASDAQ:META", "нетфликс": "NASDAQ:NFLX", "netflix": "NASDAQ:NFLX",
+  "амд": "NASDAQ:AMD", "amd": "NASDAQ:AMD", "интел": "NASDAQ:INTC", "intel": "NASDAQ:INTC", "кока кола": "NYSE:KO", "кокакола": "NYSE:KO",
+  "макдональдс": "NYSE:MCD", "найк": "NYSE:NKE", "nike": "NYSE:NKE", "боинг": "NYSE:BA", "boeing": "NYSE:BA", "дисней": "NYSE:DIS",
+  "палантир": "NASDAQ:PLTR", "pltr": "NASDAQ:PLTR", "койнбейс": "NASDAQ:COIN", "coinbase": "NASDAQ:COIN", "микростратеджи": "NASDAQ:MSTR", "mstr": "NASDAQ:MSTR",
+};
+const FILLER = new Set(["и", "а", "или", "график", "графики", "покажи", "пришли", "дай", "скинь", "мне", "пожалуйста", "плиз", "please",
+  "chart", "show", "the", "please", "сейчас", "now", "курс", "цена", "по", "на", "за", "сегодня"]);
+
+const AI_SYSTEM = `You convert a user's request (Russian or English, may contain slang or typos) into TradingView symbols.
+Reply ONLY with a JSON array of strings, nothing else. Empty array [] if no financial instrument is mentioned.
+Rules: crypto -> BINANCE:<COIN>USDT (bitcoin -> BINANCE:BTCUSDT). Forex -> OANDA:EURUSD style. Gold OANDA:XAUUSD, silver OANDA:XAGUSD,
+oil TVC:USOIL, brent TVC:UKOIL, dollar index TVC:DXY. Indices: Nasdaq100 OANDA:NAS100USD, S&P500 OANDA:SPX500USD, Dow OANDA:US30USD, DAX OANDA:DE30EUR.
+US stocks -> NASDAQ:TICKER or NYSE:TICKER (Apple NASDAQ:AAPL, Coca-Cola NYSE:KO). Other countries -> that exchange (e.g. LSE:, XETR:, MOEX:, TSE:).
+Several instruments -> several entries. Max 5.`;
+
+async function resolveSymbols(env, text) {
+  const t = text.toLowerCase().replace(/ё/g, "е");
+  // 1) whole phrase in the dictionary?
+  if (DICT[t.trim()]) return { symbols: [DICT[t.trim()]], via: "dict" };
+  // 2) word by word
+  const words = t.split(/[\s,;]+/).filter((w) => w && !FILLER.has(w));
+  const hits = words.map((w) => DICT[w] || (/^[a-z]{2,10}:[a-z0-9!._]{2,15}$/i.test(w) ? w.toUpperCase() : null));
+  if (words.length && hits.every(Boolean)) return { symbols: [...new Set(hits)], via: "dict" };
+  // 3) ask Workers AI
+  if (!env.AI) return { symbols: [], via: "no-ai" };
+  try {
+    const out = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+      messages: [{ role: "system", content: AI_SYSTEM }, { role: "user", content: text }],
+      max_tokens: 100, temperature: 0,
+    });
+    const raw = String(out.response || "");
+    const m = raw.match(/\[[\s\S]*?\]/);
+    const arr = m ? JSON.parse(m[0]) : [];
+    const symbols = arr.filter((x) => typeof x === "string" && /^[A-Z0-9_]{2,12}:[A-Z0-9!._]{1,20}$/.test(x)).slice(0, 5);
+    return { symbols: [...new Set(symbols)], via: "ai" };
+  } catch (e) {
+    return { symbols: [], via: "ai-error " + e.message };
+  }
+}
+
 // ---------------------------------------------------------------------------
 
 async function handle(update, env) {
@@ -377,15 +453,27 @@ async function handle(update, env) {
     return send(settingsText(env, s), { reply_markup: settingsKeyboard(env, s) });
   }
 
-  if (cmd !== "/chart") return;
-
-  const wanted = parts.slice(1).map((p) => normalize(env, p)).filter(Boolean);
-  if (wanted.length === 0) {
-    const s = await getSettings(env);
-    return send("Какой график прислать?\nИли напиши, например: /chart usdjpy", { reply_markup: chartKeyboard(env, s) });
+  if (cmd !== "/chart") {
+    if (cmd.startsWith("/")) return;                       // unknown command - ignore
+    // Free text: "биткоин", "эпл и амазон", "нефть" ... -> chart(s)
+    const { symbols } = await resolveSymbols(env, raw);
+    if (!symbols.length) {
+      return send("Не понял, какой это инструмент 🤔\nНапиши название или тикер, например: биткоин, эпл, золото, нефть, NASDAQ:TSLA");
+    }
+    const r = await runWorkflow(env, true, symbols.join(","));
+    const names = symbols.map((x) => `${shortName(x)} (${x})`).join(", ");
+    return send(r.ok ? `⏳ Делаю ${names}, пришлю примерно через минуту` : `⚠️ GitHub не запустил робота (${r.status})`);
   }
+
+  const rest = parts.slice(1).join(" ").trim();
+  if (!rest) {
+    const s = await getSettings(env);
+    return send("Какой график прислать?\nИли просто напиши название: биткоин, эпл, золото…", { reply_markup: chartKeyboard(env, s) });
+  }
+  let { symbols: wanted } = await resolveSymbols(env, rest);
+  if (!wanted.length) wanted = parts.slice(1).map((p) => normalize(env, p)).filter(Boolean); // raw tickers like usdjpy
   const r = await runWorkflow(env, true, wanted.join(","));
-  const names = wanted.map(shortName).join(", ");
+  const names = wanted.map((x) => `${shortName(x)} (${x})`).join(", ");
   return send(r.ok
     ? `⏳ Делаю ${names}, пришлю примерно через минуту`
     : `⚠️ GitHub не запустил робота (${r.status}). Проверь GH_TOKEN в Cloudflare.\n${r.body.slice(0, 300)}`);
