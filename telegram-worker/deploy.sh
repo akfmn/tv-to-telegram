@@ -14,8 +14,9 @@ AUTH=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN:?}")
 tok=$(printf '%s' "${CLOUDFLARE_API_TOKEN}" | python3 -c '
 import re,sys
 raw=sys.stdin.read()
-m=re.search(r"Bearer\s+([A-Za-z0-9_-]{40})", raw) or re.search(r"([A-Za-z0-9_-]{40})", raw)
-print(m.group(1) if m else raw.strip())')
+m=re.search(r"Bearer\s+([A-Za-z0-9_.-]+)", raw)
+runs=sorted(re.findall(r"[A-Za-z0-9_.-]{30,}", raw), key=len, reverse=True)
+print(m.group(1) if m else (runs[0] if runs else raw.strip()))')
 echo "token length: ${#tok} (raw ${#CLOUDFLARE_API_TOKEN}), account id length: ${#ACCOUNT}"
 curl -sS -H "Authorization: Bearer $tok" https://api.cloudflare.com/client/v4/user/tokens/verify \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print("token verify:", "OK, status " + d["result"]["status"] if d.get("success") else "FAILED " + json.dumps(d.get("errors")))'
