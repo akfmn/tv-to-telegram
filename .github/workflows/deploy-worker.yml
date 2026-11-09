@@ -1,0 +1,28 @@
+name: Deploy Telegram bot (Cloudflare Worker)
+
+# Runs when telegram-worker/worker.js changes. Needs two repository secrets:
+#   CLOUDFLARE_API_TOKEN   - Cloudflare -> My Profile -> API Tokens -> "Edit Cloudflare Workers"
+#   CLOUDFLARE_ACCOUNT_ID  - the id from the dashboard URL (dash.cloudflare.com/<id>/...)
+# Without the token the job just skips, nothing breaks.
+on:
+  push:
+    paths: ["telegram-worker/**", ".github/workflows/deploy-worker.yml"]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Syntax check
+        run: node --check telegram-worker/worker.js
+      - name: Deploy
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        run: bash telegram-worker/deploy.sh
+      - name: No token yet
+        if: env.CLOUDFLARE_API_TOKEN == ''
+        run: echo "CLOUDFLARE_API_TOKEN is not set - skipping deploy (paste the code in the Cloudflare editor instead)."

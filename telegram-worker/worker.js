@@ -50,6 +50,7 @@ const HELP = [
   "",
   "━━━ ПРОСТО НАПИШИ НАЗВАНИЕ ━━━",
   "Бот понимает обычные слова: «биткоин», «эфир», «эпл», «амазон», «золото», «нефть», «насдак», «евро»… и даже несколько сразу: «эпл и тесла». Редкие названия он распознаёт через ИИ. Через ~40 секунд придёт график по нашему шаблону.",
+  "Можно указать таймфрейм и индикаторы только для этого графика: «apple дневной с ma 150», «биткоин часовой rsi 14 macd», «золото 15 минут ema 200». Слово «только» — скрыть твои индикаторы: «эпл дневной только ma 150». Таймфреймы: минутка, 5/15/30 минут, часовой, 4 часа, дневной, недельный. Индикаторы: ma/sma, ema, rsi, macd, bollinger, vwap, объём, atr, стохастик, ишимоку, supertrend, psar. Твой сохранённый график при этом не меняется.",
   "",
   "━━━ ТЕКСТОВЫЕ КОМАНДЫ ━━━",
   "Нужны, когда нужного значения нет на кнопках:",
@@ -305,7 +306,7 @@ const DICT = {
   "палантир": "NASDAQ:PLTR", "pltr": "NASDAQ:PLTR", "койнбейс": "NASDAQ:COIN", "coinbase": "NASDAQ:COIN", "микростратеджи": "NASDAQ:MSTR", "mstr": "NASDAQ:MSTR",
 };
 const FILLER = new Set(["и", "а", "или", "график", "графики", "покажи", "пришли", "дай", "скинь", "мне", "пожалуйста", "плиз", "please",
-  "chart", "show", "the", "please", "сейчас", "now", "курс", "цена", "по", "на", "за", "сегодня"]);
+  "chart", "show", "the", "please", "сейчас", "now", "курс", "цена", "по", "на", "за", "сегодня", "с", "со", "для", "of", "for", "with"]);
 
 const AI_SYSTEM = `You convert a user's request (Russian or English, may contain slang or typos) into TradingView symbols.
 Reply ONLY with a JSON array of strings, nothing else. Empty array [] if no financial instrument is mentioned.
@@ -328,6 +329,74 @@ async function transcribe(env, file) {
     console.error("transcribe failed", e.message);
     return "";
   }
+}
+
+// "пришли график Apple дневной с индикатором moving 150"
+//   -> { interval: "1D", studies: ["sma:150"], only: false, rest: "apple" }
+// Timeframe and indicators are cut out of the text; what is left goes to the symbol resolver.
+const TF_WORDS = [
+  [/(^|\s)(минутк[аиу]|1\s*мин(ут[аы]?)?|1\s*m|m1)(?=\s|$)/, "1"],
+  [/(^|\s)(\d+)\s*(мин(ут[аы]?)?|m|min)(?=\s|$)/, (m) => m[2]],
+  [/(^|\s)(часов(ой|ик|ым)?|hourly|1\s*h|h1|1\s*час)(?=\s|$)/, "60"],
+  [/(^|\s)(\d+)\s*(ч|час[аов]*|h)(?=\s|$)/, (m) => String(+m[2] * 60)],
+  [/(^|\s)(дневн[а-яa-z]*|дейли|daily|1\s*d|d1|день|сутки|суточн[а-яa-z]*)(?=\s|$)/, "1D"],
+  [/(^|\s)(недельн[а-яa-z]*|неделя|weekly|1\s*w|w1)(?=\s|$)/, "1W"],
+  [/(^|\s)(месячн[а-яa-z]*|месяц|monthly|1\s*mo)(?=\s|$)/, "1M"],
+];
+const STUDY_WORDS = [
+  [/(^|\s)(ema|экспоненциальн[а-яa-z]*(\s+скользящ[а-яa-z]*)?|эма)\s*(\d+)?(?=\s|$)/, "ema"],
+  [/(^|\s)(sma|ma|moving(\s+average)?|мувинг|скользящ[а-яa-z]*(\s+средн[а-яa-z]*)?|средн[а-яa-z]*|машк[аи]|ма)\s*(\d+)?(?=\s|$)/, "sma"],
+  [/(^|\s)(rsi|рси| рсай)\s*(\d+)?(?=\s|$)/, "rsi"],
+  [/(^|\s)(macd|макд|макди)(?=\s|$)/, "macd"],
+  [/(^|\s)(bollinger(\s+bands)?|bb|боллинджер[а-яa-z]*|боллиндж[а-яa-z]*|полос[а-яa-z]*\s+боллинджера)\s*(\d+)?(?=\s|$)/, "bb"],
+  [/(^|\s)(vwap|вивап)(?=\s|$)/, "vwap"],
+  [/(^|\s)(volume|объ[её]м[а-яa-z]*)(?=\s|$)/, "volume"],
+  [/(^|\s)(atr|атр)\s*(\d+)?(?=\s|$)/, "atr"],
+  [/(^|\s)(stoch[а-яa-z]*|стохастик[а-яa-z]*)(?=\s|$)/, "stoch"],
+  [/(^|\s)(ichimoku|ишимоку|ичимоку)(?=\s|$)/, "ichimoku"],
+  [/(^|\s)(supertrend|супертренд)(?=\s|$)/, "supertrend"],
+  [/(^|\s)(psar|parabolic(\s+sar)?|параболик[а-яa-z]*)(?=\s|$)/, "psar"],
+  [/(^|\s)(cci)\s*(\d+)?(?=\s|$)/, "cci"], [/(^|\s)(adx)(?=\s|$)/, "adx"], [/(^|\s)(obv)(?=\s|$)/, "obv"],
+];
+
+function parseRequest(raw) {
+  let t = " " + raw.toLowerCase().replace(/ё/g, "е").replace(/[,.!?]/g, " ").replace(/\s+/g, " ") + " ";
+  const out = { interval: "", studies: [], only: false };
+  if (/\s(только|без моих|без остальных|без других)\s/.test(t)) {
+    out.only = true;
+    t = t.replace(/\s(только с|только|без моих|без остальных|без других)\s/g, " ");
+  }
+  t = t.replace(/\s(таймфрейм[а-яa-z]*|тф|timeframe|tf|период[а-яa-z]*|интервал[а-яa-z]*|индикатор[а-яa-z]*|с индикатор[а-яa-z]*|indicator[а-яa-z]*|добавь|и)\s/g, " ");
+  for (const [re, val] of TF_WORDS) {
+    const m = t.match(re);
+    if (m) { out.interval = typeof val === "function" ? val(m) : val; t = t.replace(re, " "); break; }
+  }
+  for (let guard = 0; guard < 6; guard++) {          // several indicators in one phrase
+    let hit = false;
+    for (const [re, code] of STUDY_WORDS) {
+      const m = t.match(re);
+      if (!m) continue;
+      const n = (m[m.length - 1] || "").match(/^\d+$/) ? m[m.length - 1] : "";
+      out.studies.push(code + (n ? ":" + n : ""));
+      t = t.replace(re, " ");
+      hit = true;
+      break;
+    }
+    if (!hit) break;
+  }
+  out.rest = t.replace(/\s+/g, " ").trim();
+  return out;
+}
+
+const studyLabel = (c) => { const [code, n] = c.split(":"); return code.toUpperCase() + (n ? " " + n : ""); };
+const prettyInterval = (iv) => /^\d+$/.test(iv) ? (+iv % 60 === 0 && +iv >= 60 ? +iv / 60 + "h" : iv + "m") : iv;
+
+// "⏳ Делаю AAPL (NASDAQ:AAPL) · 1D · SMA 150, пришлю примерно через минуту"
+function describe(symbols, q) {
+  const parts = [symbols.map((x) => `${shortName(x)} (${x})`).join(", ")];
+  if (q?.interval) parts.push(prettyInterval(q.interval));
+  if (q?.studies?.length) parts.push(q.studies.map(studyLabel).join(", ") + (q.only ? " (только они)" : ""));
+  return parts.join(" · ");
 }
 
 // "добавь в рассылку биткоин и эфир" -> { add: true, what: "биткоин и эфир" }
@@ -542,16 +611,16 @@ async function handle(update, env) {
       return send(...(await editList(env, edit.add, symbols)));
     }
 
-    // Free text: "биткоин", "эпл и амазон", "нефть" ... -> chart(s)
-    const res = await resolveSymbols(env, raw);
-    console.log("resolve", JSON.stringify(res));
+    // Free text: "биткоин", "эпл и амазон", "apple дневной с ma 150" ... -> chart(s)
+    const q = parseRequest(raw);
+    const res = await resolveSymbols(env, q.rest || raw);
+    console.log("resolve", JSON.stringify({ q, res }));
     const { symbols } = res;
     if (!symbols.length) {
-      return send("Не понял, какой это инструмент 🤔\nНапиши название или тикер, например: биткоин, эпл, золото, нефть, NASDAQ:TSLA");
+      return send("Не понял, какой это инструмент 🤔\nНапиши название или тикер, например: биткоин, эпл, золото, нефть, NASDAQ:TSLA\nМожно с таймфреймом и индикатором: «эпл дневной с ma 150»");
     }
-    const r = await runWorkflow(env, true, symbols.join(","));
-    const names = symbols.map((x) => `${shortName(x)} (${x})`).join(", ");
-    return send(r.ok ? `⏳ Делаю ${names}, пришлю примерно через минуту` : `⚠️ GitHub не запустил робота (${r.status})`);
+    const r = await runWorkflow(env, true, symbols.join(","), q);
+    return send(r.ok ? `⏳ Делаю ${describe(symbols, q)}, пришлю примерно через минуту` : `⚠️ GitHub не запустил робота (${r.status})`);
   }
 
   const rest = parts.slice(1).join(" ").trim();
@@ -559,18 +628,22 @@ async function handle(update, env) {
     const s = await getSettings(env);
     return send("Какой график прислать?\nИли просто напиши название: биткоин, эпл, золото…", { reply_markup: chartKeyboard(env, s) });
   }
-  let { symbols: wanted } = await resolveSymbols(env, rest);
-  if (!wanted.length) wanted = parts.slice(1).map((p) => normalize(env, p)).filter(Boolean); // raw tickers like usdjpy
-  const r = await runWorkflow(env, true, wanted.join(","));
-  const names = wanted.map((x) => `${shortName(x)} (${x})`).join(", ");
+  const q = parseRequest(rest);
+  let { symbols: wanted } = await resolveSymbols(env, q.rest || rest);
+  if (!wanted.length) wanted = (q.rest || rest).split(/\s+/).map((p) => normalize(env, p)).filter(Boolean); // raw tickers like usdjpy
+  const r = await runWorkflow(env, true, wanted.join(","), q);
   return send(r.ok
-    ? `⏳ Делаю ${names}, пришлю примерно через минуту`
+    ? `⏳ Делаю ${describe(wanted, q)}, пришлю примерно через минуту`
     : `⚠️ GitHub не запустил робота (${r.status}). Проверь GH_TOKEN в Cloudflare.\n${r.body.slice(0, 300)}`);
 }
 
 // Press "Run workflow" on GitHub, passing the remembered range.
-async function runWorkflow(env, force, symbols = "") {
+async function runWorkflow(env, force, symbols = "", opts = {}) {
   const s = await getSettings(env);
+  const extra = {};
+  if (opts.interval) extra.interval = opts.interval;             // "1D", "60" - this run only
+  if (opts.studies?.length) extra.studies = opts.studies.join(","); // "sma:150,rsi:14"
+  if (opts.only) extra.only_studies = "true";
   const r = await fetch(
     `https://api.github.com/repos/${GH_REPO}/actions/workflows/${GH_WORKFLOW}/dispatches`,
     {
@@ -583,7 +656,7 @@ async function runWorkflow(env, force, symbols = "") {
       },
       body: JSON.stringify({
         ref: "main",
-        inputs: { force: force ? "true" : "false", symbols, view_hours: String(s.range), work_hours: workHours(s) },
+        inputs: { force: force ? "true" : "false", symbols, view_hours: String(s.range), work_hours: workHours(s), ...extra },
       }),
     }
   );
