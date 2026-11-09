@@ -56,6 +56,9 @@ SEND_AS_FILE = env("SEND_AS_FILE", "0") == "1"
 WORK_HOURS = env("WORK_HOURS", "09:00-17:00")   # local time window, empty = always
 WORK_DAYS = env("WORK_DAYS", "1-5")             # 1=Mon ... 7=Sun, empty = every day
 VIEW_HOURS = float(env("VIEW_HOURS", "24"))      # always show exactly the last N hours (0 = as saved)
+INTERVAL_OVERRIDE = env("INTERVAL_OVERRIDE", "").strip()   # "1D", "60", "15": timeframe for this run only
+STUDIES = env("STUDIES", "").strip()                       # "sma:150,ema:200,rsi:14": indicators for this run only
+ONLY_STUDIES = env("ONLY_STUDIES", "") == "1"              # hide your own indicators, show only STUDIES
 WATERMARK = env("WATERMARK", "1") != "0"         # big currency code in the top-right corner
 ALBUM = env("ALBUM", "0") == "1"                 # 1 = all charts in one album; 0 = separate messages
 FORCE = env("FORCE", "false") == "true"          # manual run: ignore the window
@@ -121,7 +124,112 @@ def parse_charts():
         base = charts[0]
         charts = [{"url": base["url"], "symbol": sym.strip(), "interval": base["interval"]}
                   for sym in override.split(",") if sym.strip()]
+    if INTERVAL_OVERRIDE:              # "пришли дневной" -> every chart in this run uses that timeframe
+        for c in charts:
+            c["interval"] = norm_interval(INTERVAL_OVERRIDE)
     return charts
+
+
+def norm_interval(iv):
+    """1d/D/day -> 1D, 1h -> 60, 4h -> 240, 15 -> 15, 1w -> 1W (TradingView notation)."""
+    t = iv.strip().upper().replace(" ", "")
+    m = re.fullmatch(r"(\d*)(M|H|D|W|MO|MIN|S)?", t)
+    if not m:
+        return t
+    n, unit = int(m.group(1) or 1), m.group(2)
+    if unit in (None, "M", "MIN"):
+        return str(n)
+    if unit == "H":
+        return str(n * 60)
+    if unit == "S":
+        return f"{n}S"
+    if unit == "MO":
+        return f"{n}M"
+    return f"{n}{unit}"            # D / W
+
+
+# ---------- extra indicators for one run ----------
+# short code -> (TradingView study name, input key for the number)
+STUDY_MAP = {
+    "sma": ("Moving Average", "length"), "ma": ("Moving Average", "length"),
+    "ema": ("Moving Average Exponential", "length"),
+    "wma": ("Moving Average Weighted", "length"),
+    "hma": ("Hull Moving Average", "length"),
+    "rsi": ("Relative Strength Index", "length"),
+    "atr": ("Average True Range", "length"),
+    "bb": ("Bollinger Bands", "length"), "bollinger": ("Bollinger Bands", "length"),
+    "macd": ("MACD", None), "vwap": ("VWAP", None), "volume": ("Volume", None), "vol": ("Volume", None),
+    "stoch": ("Stochastic", None), "ichimoku": ("Ichimoku Cloud", None),
+    "psar": ("Parabolic SAR", None), "supertrend": ("SuperTrend", None),
+    "cci": ("Commodity Channel Index", "length"), "adx": ("Average Directional Index", None),
+    "obv": ("On Balance Volume", None), "mfi": ("Money Flow Index", "length"),
+    "williams": ("Williams %R", "length"), "donchian": ("Donchian Channels", "length"),
+    "keltner": ("Keltner Channels", "length"), "pivots": ("Pivot Points Standard", None),
+}
+
+
+def parse_studies(spec):
+    """'sma:150,ema:200,rsi' -> [{'name': 'Moving Average', 'inputs': {'length': 150}, 'label': 'MA 150'}, ...]"""
+    out = []
+    for item in spec.replace(";", ",").split(","):
+        item = item.strip().lower()
+        if not item:
+            continue
+        code, _, num = item.partition(":")
+        if code not in STUDY_MAP:
+            print(f"::warning::unknown indicator code '{code}' ignored")
+            continue
+        name, key = STUDY_MAP[code]
+        inputs, label = {}, name
+        if key and num.isdigit():
+            inputs[key] = int(num)
+            label = f"{code.upper()} {num}"
+        elif code in ("sma", "ma", "ema", "wma", "hma", "rsi", "atr", "bb", "cci", "mfi"):
+            label = code.upper()
+        else:
+            label = {"macd": "MACD", "vwap": "VWAP", "volume": "Volume", "vol": "Volume"}.get(code, name)
+        out.append({"name": name, "inputs": inputs, "label": label})
+    return out
+
+
+ADD_STUDIES_JS = """
+async ([studies, onlyThese]) => {
+  const api = window.TradingViewApi;
+  if (!api || !api.activeChart) return 'no TradingViewApi';
+  const ch = api.activeChart();
+  const log = [];
+  if (onlyThese) {                     // hide the layout's own indicators for this picture
+    try {
+      for (const st of ch.getAllStudies()) {
+        try { ch.getStudyById(st.id).setVisible(false); } catch (e) {}
+      }
+      log.push('hid ' + ch.getAllStudies().length);
+    } catch (e) { log.push('hide-err ' + e.message); }
+  }
+  for (const s of studies) {
+    let id = null, err = '';
+    try { id = await ch.createStudy(s.name, false, false, s.inputs); }
+    catch (e1) {
+      err = e1.message;
+      try { id = await ch.createStudy(s.name, false, false, Object.values(s.inputs)); err = ''; }
+      catch (e2) { err += ' / ' + e2.message; }
+    }
+    log.push(s.name + (id ? ' ok' : ' FAIL ' + err));
+  }
+  await new Promise(r => setTimeout(r, 1500));   // let them calculate and draw
+  return log.join('; ');
+}
+"""
+
+
+def add_studies(page, studies):
+    if not studies:
+        return
+    try:
+        res = page.evaluate(ADD_STUDIES_JS, [studies, ONLY_STUDIES])
+    except Exception as e:
+        res = f"error {e}"
+    print(f"::notice::studies -> {res}")
 
 
 def build_url(c):
@@ -135,7 +243,7 @@ def build_url(c):
 
 
 SET_VIEW_JS = """
-async ([hours, fallbackInterval]) => {
+async ([hours, fallbackInterval, minBars]) => {
   const api = window.TradingViewApi;
   if (!api || !api.activeChart) return 'no TradingViewApi';
   const ch = api.activeChart();
@@ -146,7 +254,9 @@ async ([hours, fallbackInterval]) => {
            : /^\\d*S$/.test(res) ? (parseInt(res) || 1) / 60
            : /^\\d*D$/.test(res) ? (parseInt(res) || 1) * 1440
            : /^\\d*W$/.test(res) ? (parseInt(res) || 1) * 10080 : 5;
-  const bars = Math.max(10, Math.round(hours * 60 / mins));
+  // hours -> bars; a daily chart asked for "48 hours" would be 2 candles, so keep at
+  // least minBars candles on screen when a timeframe was chosen for this run
+  const bars = Math.max(minBars || 10, Math.round(hours * 60 / mins));
   const w = ch._chartWidget || (ch.chartWidget && ch.chartWidget());
   // 1) Reset scales (= Alt+R): price axis back to Auto so every candle fits vertically,
   //    even if the saved layout had the price scale dragged/zoomed by hand.
@@ -187,7 +297,8 @@ def set_view(page):
             pass
         time.sleep(1)
     try:
-        res = page.evaluate(SET_VIEW_JS, [VIEW_HOURS, INTERVAL])
+        min_bars = 200 if INTERVAL_OVERRIDE else 10
+        res = page.evaluate(SET_VIEW_JS, [VIEW_HOURS, INTERVAL_OVERRIDE or INTERVAL, min_bars])
     except Exception as e:
         res = f"error {e}"
     print(f"::notice::set_view -> {res}")
@@ -292,6 +403,7 @@ def shoot(page, chart, out_path, loaded=False):
         page.keyboard.press("Escape")
         time.sleep(0.15)
     page.mouse.move(5, 5)  # move cursor away so no crosshair on chart
+    add_studies(page, chart.get("studies") or [])
     if VIEW_HOURS > 0:
         set_view(page)
     # Hide floating toolbars over the chart (favorite drawing tools etc.)
@@ -372,7 +484,7 @@ def take_screenshots(charts):
                         tg_text("⚠️ TradingView login expired — charts are without your "
                                 "indicators. Update TV_SESSIONID / TV_SESSIONID_SIGN in GitHub Secrets.")
                 label = chart["symbol"] or title.split(" ")[0]
-                results.append((out, label, chart["interval"]))
+                results.append((out, label, chart["interval"] + (" · " + chart["tag"] if chart.get("tag") else "")))
             except Exception as e:
                 errors.append(f"#{i + 1} {chart['url']}: {e}")
         browser.close()
@@ -381,6 +493,14 @@ def take_screenshots(charts):
 
 # ---------- telegram ----------
 
+def pretty_interval(iv):
+    """5 -> 5m, 60 -> 1h, 240 -> 4h, 1D -> 1D."""
+    if iv.isdigit():
+        n = int(iv)
+        return f"{n // 60}h" if n % 60 == 0 and n >= 60 else f"{n}m"
+    return iv
+
+
 def tg_text(text):
     requests.post(f"{TG_API}/sendMessage",
                   data={"chat_id": TG_CHAT_ID, "text": text}, timeout=30)
@@ -388,7 +508,9 @@ def tg_text(text):
 
 def tg_send(results):
     now = datetime.now(ZoneInfo(TZ_NAME)).strftime("%d.%m %H:%M")
-    caption = lambda label, iv: f"{label} · {iv}m · {now}" if iv.isdigit() else f"{label} · {iv} · {now}"
+    def caption(label, iv):
+        head, _, tag = iv.partition(" · ")          # "60 · MA 150" -> "1h · MA 150"
+        return " · ".join(x for x in (label, pretty_interval(head), tag, now) if x)
 
     if len(results) == 1 or not ALBUM:
         # One message per chart, each with its own caption underneath
@@ -428,6 +550,10 @@ def main():
         print(f"Not sending: {why} ({TZ_NAME}).")
         return
     charts = parse_charts()
+    studies = parse_studies(STUDIES)
+    for c in charts:
+        c["studies"] = studies
+        c["tag"] = " · ".join(st["label"] for st in studies)
     try:
         results, errors = take_screenshots(charts)
     except Exception as e:

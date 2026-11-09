@@ -18,6 +18,15 @@ on:
       work_hours:
         description: "Рабочие часы для расписания, например 09:00-17:00 (пусто = настройка WORK_HOURS)"
         default: ""
+      interval:
+        description: "Таймфрейм только для этого запуска: 1D, 60, 15, 1W (пусто = как обычно)"
+        default: ""
+      studies:
+        description: "Индикаторы только для этого запуска: sma:150,ema:200,rsi:14,macd (пусто = только твои)"
+        default: ""
+      only_studies:
+        description: "true = скрыть твои индикаторы, показать только из studies"
+        default: "false"
   push:                       # тест без браузера: изменение файла .run-test
     paths: [".run-test"]
 
@@ -57,6 +66,9 @@ jobs:
           ALBUM: ${{ vars.ALBUM }}
           FORCE: ${{ github.event_name == 'push' || inputs.force == 'true' }}
           SYMBOLS_OVERRIDE: ${{ inputs.symbols }}
+          INTERVAL_OVERRIDE: ${{ inputs.interval }}
+          STUDIES: ${{ inputs.studies }}
+          ONLY_STUDIES: ${{ inputs.only_studies == 'true' && '1' || '' }}
         run: python tv_shot.py
 
       # GitHub отключает расписание, если в репозитории 60 дней нет коммитов.
