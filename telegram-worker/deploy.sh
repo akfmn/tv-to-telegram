@@ -8,6 +8,14 @@ SCRIPT="${CF_WORKER_NAME:-tv-chart-bot}"
 API="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/workers/scripts/$SCRIPT"
 AUTH=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN:?}")
 
+# 0) is the token itself fine? (prints only status and lengths, never the values)
+tok="${CLOUDFLARE_API_TOKEN}"
+echo "token length: ${#tok}, account id length: ${#ACCOUNT}"
+case "$tok" in *[[:space:]]*) echo "::warning::token contains whitespace/newline - re-paste it without spaces";; esac
+curl -sS -H "Authorization: Bearer ${tok//[$'\r\n ']/}" https://api.cloudflare.com/client/v4/user/tokens/verify \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print("token verify:", "OK, status " + d["result"]["status"] if d.get("success") else "FAILED " + json.dumps(d.get("errors")))'
+AUTH=(-H "Authorization: Bearer ${tok//[$'\r\n ']/}")
+
 # 1) current bindings (secrets come back without values and are kept via keep_bindings)
 settings=$(curl -sS "${AUTH[@]}" "$API/settings")
 echo "$settings" | python3 -c '
