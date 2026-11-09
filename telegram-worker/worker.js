@@ -52,6 +52,9 @@ const HELP = [
   "Бот понимает обычные слова: «биткоин», «эфир», «эпл», «амазон», «золото», «нефть», «насдак», «евро»… и даже несколько сразу: «эпл и тесла». Редкие названия он распознаёт через ИИ. Через ~40 секунд придёт график по нашему шаблону.",
   "Можно указать таймфрейм и индикаторы только для этого графика: «apple дневной с ma 150», «биткоин часовой rsi 14 macd», «золото 15 минут ema 200». Слово «только» — скрыть твои индикаторы: «эпл дневной только ma 150». Таймфреймы: минутка, 5/15/30 минут, часовой, 4 часа, дневной, недельный. Индикаторы: ma/sma, ema, rsi, macd, bollinger, vwap, объём, atr, стохастик, ишимоку, supertrend, psar. Твой сохранённый график при этом не меняется.",
   "",
+  "━━━ ШАБЛОНЫ (кнопки внизу) ━━━",
+  "Кнопка = готовый таймфрейм и индикаторы. Нажал шаблон → бот спросил инструмент → написал «Coca-Cola» → пришёл график. «Чистый» = без твоих индикаторов на этом снимке. Управление: /presets; добавить словами: «добавь шаблон Дневной RSI: дневной rsi 14 чистый»; удалить: «удали шаблон Дневной RSI».",
+  "",
   "━━━ ДРУГИЕ ЛЮДИ ━━━",
   "Боту можно писать и в личку, не только в группу. Чужой человек пишет боту /start — тебе приходит «Иван хочет пользоваться ботом» с кнопками Разрешить/Отклонить. Разрешённые получают графики себе в личку и не видят группу; настройки менять не могут. Список и удаление — /users или кнопка 👥 в настройках.",
   "",
@@ -109,6 +112,7 @@ export default {
           { command: "settings", description: "Старт/стоп, период, охват, часы" },
           { command: "help", description: "Что делает каждая кнопка и команда" },
           { command: "users", description: "Кто может пользоваться ботом (владелец)" },
+          { command: "presets", description: "Шаблоны-кнопки: таймфрейм + индикаторы (владелец)" },
         ],
       });
       const ok = webhook.ok && commands.ok;
@@ -389,9 +393,9 @@ const STUDY_WORDS = [
 function parseRequest(raw) {
   let t = " " + raw.toLowerCase().replace(/ё/g, "е").replace(/[,.!?]/g, " ").replace(/\s+/g, " ") + " ";
   const out = { interval: "", studies: [], only: false };
-  if (/\s(только|без моих|без остальных|без других)\s/.test(t)) {
+  if (/\s(только|без моих|без остальных|без других|чист(ый|ая|ое)|без индикаторов|clean)\s/.test(t)) {
     out.only = true;
-    t = t.replace(/\s(только с|только|без моих|без остальных|без других)\s/g, " ");
+    t = t.replace(/\s(только с|только|без моих|без остальных|без других|чист(ый|ая|ое)|без индикаторов|clean|график)\s/g, " ");
   }
   t = t.replace(/\s(таймфрейм[а-яa-z]*|тф|timeframe|tf|период[а-яa-z]*|интервал[а-яa-z]*|индикатор[а-яa-z]*|с индикатор[а-яa-z]*|indicator[а-яa-z]*|добавь|и)\s/g, " ");
   for (const [re, val] of TF_WORDS) {
@@ -424,6 +428,50 @@ function describe(symbols, q) {
   if (q?.interval) parts.push(prettyInterval(q.interval));
   if (q?.studies?.length) parts.push(q.studies.map(studyLabel).join(", ") + (q.only ? " (только они)" : ""));
   return parts.join(" · ");
+}
+
+// ---------------------------------------------------------------------------
+// presets: a button = timeframe + indicators chosen by the owner; the person only
+// types the instrument.  spec is a plain phrase parsed by parseRequest().
+const DEFAULT_PRESETS = [
+  { name: "📅 Дневной MA 150", spec: "дневной ma 150 чистый" },
+  { name: "🕐 Часовой чистый", spec: "часовой чистый" },
+  { name: "📆 Недельный чистый", spec: "недельный чистый" },
+  { name: "⚡ 5 минут", spec: "" },
+];
+async function getPresets(env) {
+  try { const p = await env.SETTINGS.get("presets", "json"); if (Array.isArray(p)) return p; } catch (e) {}
+  return DEFAULT_PRESETS;
+}
+async function savePresets(env, list) { await env.SETTINGS.put("presets", JSON.stringify(list)); }
+const findPreset = (list, text) => list.find((p) => p.name.toLowerCase() === text.toLowerCase().trim());
+function presetKeyboard(presets, role) {
+  const rows = [];
+  for (let i = 0; i < presets.length; i += 2) rows.push(presets.slice(i, i + 2).map((p) => ({ text: p.name })));
+  rows.push(canConfigure(role) ? [{ text: BTN.chart }, { text: BTN.settings }] : [{ text: BTN.chart }]);
+  return { keyboard: rows, resize_keyboard: true, is_persistent: true };
+}
+function presetText(p) {
+  const q = parseRequest(p.spec || "");
+  const bits = [q.interval ? prettyInterval(q.interval) : "5m", ...(q.studies.length ? [q.studies.map(studyLabel).join(", ")] : []), q.only ? "без индикаторов владельца" : "индикаторы владельца"];
+  return bits.join(" · ");
+}
+async function sendPresets(env, chatId) {
+  const list = await getPresets(env);
+  const text = ["🧩 Шаблоны (кнопки внизу у всех пользователей)", "",
+    ...list.map((p, i) => `${i + 1}. ${p.name} — ${presetText(p)}`), "",
+    "Добавить: добавь шаблон Название: дневной rsi 14 чистый", "Удалить: кнопкой ниже или «удали шаблон Название»"].join("\n");
+  const kb = list.map((p, i) => [{ text: `🗑 ${p.name}`.slice(0, 60), callback_data: "pdel:" + i }]);
+  kb.push([{ text: "↩️ Вернуть стандартные", callback_data: "pdef" }]);
+  await tg(env, "sendMessage", { chat_id: chatId, text, reply_markup: { inline_keyboard: kb } });
+}
+// "добавь шаблон Дневной RSI: дневной rsi 14 чистый" -> { add, name, spec } ; "удали шаблон Дневной RSI" -> { add:false, name }
+function parsePresetEdit(raw) {
+  const m = raw.match(/^(добавь|добавить|создай|удали|удалить|убери)\s+шаблон\s+(.+)$/i);
+  if (!m) return null;
+  const add = /^(добав|созда)/i.test(m[1]);
+  const [name, ...rest] = m[2].split(/[:—-]\s*/);
+  return { add, name: name.trim(), spec: rest.join(" ").trim() };
 }
 
 // owner: list of approved users with "remove" buttons
@@ -541,6 +589,15 @@ async function handle(update, env) {
       await ack();
       return sendUsers(env, chatId);
     }
+    if (data.startsWith("pdel:") || data === "pdef") {
+      if (!canConfigure(role)) return ack("Только владелец");
+      const list = await getPresets(env);
+      const next = data === "pdef" ? DEFAULT_PRESETS : list.filter((_, i) => i !== +data.slice(5));
+      await savePresets(env, next);
+      await ack("Готово");
+      await tg(env, "deleteMessage", { chat_id: chatId, message_id: q.message.message_id }).catch(() => {});
+      return sendPresets(env, chatId);
+    }
     if (!canConfigure(role) && /^(tog|per|rng|frm|to|en):/.test(data)) return ack("Настройки меняет только владелец");
 
     if (data === "help") {
@@ -632,23 +689,66 @@ async function handle(update, env) {
   if (!msg.text) return;
 
   const raw = msg.text.trim();
+  const presets = await getPresets(env);
+  const awaitKey = `await:${msg.chat.id}:${msg.from.id}`;
+
+  // a preset button -> remember it, ask for the instrument
+  const pressed = findPreset(presets, raw);
+  if (pressed) {
+    await env.SETTINGS.put(awaitKey, JSON.stringify(pressed), { expirationTtl: 600 });
+    return send(`${pressed.name} (${presetText(pressed)}).\nКакой инструмент? Напиши название или тикер: Coca-Cola, Apple, биткоин, золото… Можно несколько через запятую.`,
+      { reply_markup: { force_reply: true, input_field_placeholder: "например: Apple" } });
+  }
+  // the instrument after a preset button
+  if (!raw.startsWith("/")) {
+    let waiting = null;
+    try { waiting = await env.SETTINGS.get(awaitKey, "json"); } catch (e) {}
+    if (waiting) {
+      await env.SETTINGS.delete(awaitKey);
+      const q = parseRequest((waiting.spec || "") + " " + raw);   // preset + what the person typed
+      const { symbols } = await resolveSymbols(env, q.rest || raw);
+      if (!symbols.length) {
+        await env.SETTINGS.put(awaitKey, JSON.stringify(waiting), { expirationTtl: 600 });
+        return send("Не понял, какой это инструмент 🤔 Напиши ещё раз: Coca-Cola, Apple, биткоин, золото, NASDAQ:TSLA…");
+      }
+      const r = await runWorkflow(env, true, symbols.join(","), { ...q, chat: msg.chat.id });
+      return send(r.ok ? `⏳ Делаю ${describe(symbols, q)}, пришлю примерно через минуту` : `⚠️ GitHub не запустил робота (${r.status})`);
+    }
+  }
+
   const alias = raw === BTN.chart ? "/chart" : raw === BTN.settings ? "/settings"
               : raw === BTN.on ? "/on" : raw === BTN.off ? "/off" : null;
   const parts = (alias || raw).split(/\s+/);
   const cmd = parts[0].split("@")[0].toLowerCase();
 
   if (cmd === "/start" || cmd === "/menu") {
+    const kb = presetKeyboard(presets, role);
     if (!canConfigure(role)) {
-      return send("Напиши название инструмента — биткоин, эпл, золото, нефть — или нажми 📊 График. Можно с таймфреймом и индикатором: «эпл дневной с ma 150». /help — подробнее.",
-        { reply_markup: { keyboard: [[{ text: BTN.chart }]], resize_keyboard: true, one_time_keyboard: true } });
+      return send("👋 Нажми шаблон внизу (таймфрейм и индикаторы уже заданы) и напиши инструмент: Coca-Cola, Apple, биткоин…\nИли сразу текстом: «эпл дневной с ma 150». /help — подробнее.", { reply_markup: kb });
     }
-    // show the permanent button panel, then the settings
-    await send("Кнопки: 📊 График — прислать сейчас, ⚙️ Настройки — всё остальное (там же Старт/Стоп автоотправки).\nПанель сворачивается после нажатия; открыть снова — значок клавиатуры ⌨️ справа от поля ввода или /menu.", { reply_markup: MENU });
+    await send("Кнопки внизу: шаблоны (нажал → написал инструмент → график), 📊 График — твои инструменты сейчас, ⚙️ Настройки — всё остальное. Шаблоны редактируются через /presets.", { reply_markup: kb });
     const s = await getSettings(env);
     return send(settingsText(env, s), { reply_markup: settingsKeyboard(env, s) });
   }
 
   if (cmd === "/help") return send(HELP);
+
+  if (cmd === "/presets") {
+    if (!canConfigure(role)) return onlyOwner();
+    return sendPresets(env, msg.chat.id);
+  }
+  const pe = parsePresetEdit(raw);
+  if (pe) {
+    if (!canConfigure(role)) return onlyOwner();
+    const list = (await getPresets(env)).filter((p) => p.name.toLowerCase() !== pe.name.toLowerCase());
+    if (pe.add) {
+      if (!pe.name) return send("Напиши так: добавь шаблон Дневной RSI: дневной rsi 14 чистый");
+      list.push({ name: pe.name.slice(0, 40), spec: pe.spec });
+    }
+    await savePresets(env, list);
+    await send(pe.add ? `✅ Шаблон «${pe.name}» добавлен: ${presetText({ spec: pe.spec })}` : `🗑 Шаблон «${pe.name}» удалён`, { reply_markup: presetKeyboard(list, role) });
+    return sendPresets(env, msg.chat.id);
+  }
 
   if (cmd === "/users") {
     if (role !== "owner") return onlyOwner();

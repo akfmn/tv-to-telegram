@@ -223,7 +223,7 @@ async ([studies, onlyThese]) => {
 
 
 def add_studies(page, studies):
-    if not studies:
+    if not studies and not ONLY_STUDIES:
         return
     try:
         res = page.evaluate(ADD_STUDIES_JS, [studies, ONLY_STUDIES])
