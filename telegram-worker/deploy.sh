@@ -21,7 +21,7 @@ meta={"main_module":"worker.js","bindings":b,"keep_bindings":["secret_text"],
       "compatibility_flags":r.get("compatibility_flags") or []}
 if r.get("observability"): meta["observability"]=r["observability"]
 json.dump(meta,open("metadata.json","w"))
-print("bindings kept:", ", ".join(f"{x[\"type\"]}:{x[\"name\"]}" for x in b))
+print("bindings kept:", ", ".join(x["type"] + ":" + x["name"] for x in b))
 '
 
 # 2) upload the new code with the same bindings
