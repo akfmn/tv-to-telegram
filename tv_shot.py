@@ -45,7 +45,7 @@ def env(name, default=None, required=False):
 
 
 TG_TOKEN = env("TG_TOKEN", required=True)
-TG_CHAT_ID = env("TG_CHAT_ID", required=True)
+TG_CHAT_ID = env("CHAT_ID_OVERRIDE", "").strip() or env("TG_CHAT_ID", required=True)  # /chart from a private chat -> reply there
 CHART_URL = env("CHART_URL", required=True)
 SESSIONID = env("TV_SESSIONID", required=True)
 SESSIONID_SIGN = env("TV_SESSIONID_SIGN", "")

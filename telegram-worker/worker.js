@@ -52,6 +52,9 @@ const HELP = [
   "Бот понимает обычные слова: «биткоин», «эфир», «эпл», «амазон», «золото», «нефть», «насдак», «евро»… и даже несколько сразу: «эпл и тесла». Редкие названия он распознаёт через ИИ. Через ~40 секунд придёт график по нашему шаблону.",
   "Можно указать таймфрейм и индикаторы только для этого графика: «apple дневной с ma 150», «биткоин часовой rsi 14 macd», «золото 15 минут ema 200». Слово «только» — скрыть твои индикаторы: «эпл дневной только ma 150». Таймфреймы: минутка, 5/15/30 минут, часовой, 4 часа, дневной, недельный. Индикаторы: ma/sma, ema, rsi, macd, bollinger, vwap, объём, atr, стохастик, ишимоку, supertrend, psar. Твой сохранённый график при этом не меняется.",
   "",
+  "━━━ ДРУГИЕ ЛЮДИ ━━━",
+  "Боту можно писать и в личку, не только в группу. Чужой человек пишет боту /start — тебе приходит «Иван хочет пользоваться ботом» с кнопками Разрешить/Отклонить. Разрешённые получают графики себе в личку и не видят группу; настройки менять не могут. Список и удаление — /users или кнопка 👥 в настройках.",
+  "",
   "━━━ ТЕКСТОВЫЕ КОМАНДЫ ━━━",
   "Нужны, когда нужного значения нет на кнопках:",
   "/chart usdjpy — график любого инструмента, даже если его нет в списке. Можно несколько: /chart eurusd gbpusd. Биржа подставится сама (OANDA); другую пиши явно: /chart binance:btcusdt",
@@ -105,6 +108,7 @@ export default {
           { command: "menu", description: "Показать кнопки" },
           { command: "settings", description: "Старт/стоп, период, охват, часы" },
           { command: "help", description: "Что делает каждая кнопка и команда" },
+          { command: "users", description: "Кто может пользоваться ботом (владелец)" },
         ],
       });
       const ok = webhook.ok && commands.ok;
@@ -183,9 +187,32 @@ async function tick(env) {
 // ---------------------------------------------------------------------------
 // telegram helpers
 
-function isAllowed(env, chatId, userId) {
-  const allowed = String(env.ALLOWED_CHAT_ID || "").split(",").map((x) => x.trim()).filter(Boolean);
-  return [String(chatId), String(userId ?? "")].some((id) => allowed.includes(id));
+// Who may do what:
+//   owner  - OWNER_ID (or any id in ALLOWED_CHAT_ID): everything, incl. settings
+//   group  - messages inside the ALLOWED_CHAT_ID group: everything (as before)
+//   user   - approved by the owner (/start -> owner taps "Разрешить"): charts only, to their own chat
+//   none   - nobody; private chat gets an invitation to /start
+const idList = (v) => String(v || "").split(",").map((x) => x.trim()).filter(Boolean);
+async function getUsers(env) {
+  try { return (await env.SETTINGS.get("users", "json")) || {}; } catch (e) { return {}; }
+}
+async function saveUsers(env, users) { await env.SETTINGS.put("users", JSON.stringify(users)); }
+function ownerIds(env) {
+  const ids = idList(env.OWNER_ID);
+  return ids.length ? ids : idList(env.ALLOWED_CHAT_ID).filter((x) => !x.startsWith("-"));
+}
+async function roleOf(env, chatId, userId) {
+  const cid = String(chatId), uid = String(userId ?? "");
+  if (ownerIds(env).includes(uid)) return "owner";
+  if (idList(env.ALLOWED_CHAT_ID).includes(cid)) return "group";
+  const users = await getUsers(env);
+  if (users[uid]?.ok) return "user";
+  return "none";
+}
+const canConfigure = (role) => role === "owner" || role === "group";
+const userName = (u) => [u?.first_name, u?.last_name].filter(Boolean).join(" ") + (u?.username ? ` (@${u.username})` : "");
+async function notifyOwners(env, text, extra = {}) {
+  for (const id of ownerIds(env)) await tg(env, "sendMessage", { chat_id: id, text, ...extra });
 }
 
 const splitList = (v) => String(v || "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean);
@@ -250,7 +277,7 @@ function settingsKeyboard(env, s) {
   }
   return {
     inline_keyboard: [
-      [{ text: "❓ Помощь — что делает каждая кнопка", callback_data: "help" }],
+      [{ text: "❓ Помощь — что делает каждая кнопка", callback_data: "help" }, { text: "👥 Пользователи", callback_data: "users" }],
       [{ text: "📈 Присылать автоматически:", callback_data: "noop" }],
       ...symRows,
       [s.enabled
@@ -399,6 +426,20 @@ function describe(symbols, q) {
   return parts.join(" · ");
 }
 
+// owner: list of approved users with "remove" buttons
+async function sendUsers(env, chatId) {
+  const users = await getUsers(env);
+  const ok = Object.entries(users).filter(([, u]) => u.ok);
+  const pending = Object.entries(users).filter(([, u]) => !u.ok);
+  const lines = ["👥 Пользователи бота", "", ...(ok.length ? ok.map(([id, u]) => `✅ ${u.name} (id ${id})`) : ["пока никого, кроме тебя"])];
+  if (pending.length) lines.push("", "⏳ Ждут ответа:", ...pending.map(([id, u]) => `• ${u.name} (id ${id})`));
+  const kb = [
+    ...ok.map(([id, u]) => [{ text: `🗑 убрать ${u.name}`.slice(0, 60), callback_data: "rm:" + id }]),
+    ...pending.map(([id, u]) => [{ text: `✅ ${u.name}`.slice(0, 30), callback_data: "acc:" + id }, { text: "🚫", callback_data: "rej:" + id }]),
+  ];
+  await tg(env, "sendMessage", { chat_id: chatId, text: lines.join("\n"), reply_markup: kb.length ? { inline_keyboard: kb } : undefined });
+}
+
 // "добавь в рассылку биткоин и эфир" -> { add: true, what: "биткоин и эфир" }
 function parseListEdit(raw) {
   const t = raw.toLowerCase().replace(/ё/g, "е").trim();
@@ -472,8 +513,35 @@ async function handle(update, env) {
     const q = update.callback_query;
     const chatId = q.message?.chat?.id;
     const ack = (t) => tg(env, "answerCallbackQuery", { callback_query_id: q.id, text: t });
-    if (!isAllowed(env, chatId, q.from?.id)) return ack();
+    const role = await roleOf(env, chatId, q.from?.id);
+    if (role === "none") return ack();
     const data = String(q.data || "");
+
+    // owner approves / rejects / removes a user
+    if (/^(acc|rej|rm):/.test(data)) {
+      if (role !== "owner") return ack("Только владелец");
+      const [what, uid] = data.split(":");
+      const users = await getUsers(env);
+      const u = users[uid] || { name: uid };
+      if (what === "acc") { users[uid] = { ...u, ok: true, since: Date.now() }; }
+      else { delete users[uid]; }
+      await saveUsers(env, users);
+      await ack(what === "acc" ? "Разрешено" : "Убрано");
+      await tg(env, "editMessageText", {
+        chat_id: chatId, message_id: q.message.message_id,
+        text: what === "acc" ? `✅ ${u.name} теперь может пользоваться ботом` : `🚫 ${u.name}: доступ ${what === "rej" ? "отклонён" : "убран"}`,
+      });
+      await tg(env, "sendMessage", { chat_id: uid, text: what === "acc"
+        ? "✅ Доступ разрешён! Напиши название инструмента — биткоин, эпл, золото… — и через ~40 секунд придёт график. /help — что ещё умею."
+        : "🚫 Владелец бота не дал доступ." }).catch(() => {});
+      return;
+    }
+    if (data === "users") {
+      if (role !== "owner") return ack("Только владелец");
+      await ack();
+      return sendUsers(env, chatId);
+    }
+    if (!canConfigure(role) && /^(tog|per|rng|frm|to|en):/.test(data)) return ack("Настройки меняет только владелец");
 
     if (data === "help") {
       await ack();
@@ -499,7 +567,7 @@ async function handle(update, env) {
       const cur = await getSettings(env);
       const symbols = data === "sym:*" ? activeList(env, cur).join(",") : data.slice(4);
       if (!symbols) return ack("Нет включённых инструментов");
-      const r = await runWorkflow(env, true, symbols);
+      const r = await runWorkflow(env, true, symbols, { chat: chatId });
       const label = data === "sym:*" ? "все включённые" : shortName(symbols);
       await ack(r.ok ? "⏳ Делаю " + label : "Ошибка " + r.status);
       await tg(env, "editMessageText", {
@@ -534,8 +602,25 @@ async function handle(update, env) {
   // --- text ------------------------------------------------------------------
   const msg = update.message;
   if (!msg) return;
-  if (!isAllowed(env, msg.chat.id, msg.from?.id)) return;
   const send = (t, extra = {}) => tg(env, "sendMessage", { chat_id: msg.chat.id, text: t, ...extra });
+  const role = await roleOf(env, msg.chat.id, msg.from?.id);
+
+  if (role === "none") {
+    if (msg.chat.type !== "private") return;              // strangers' groups: silence
+    const uid = String(msg.from.id);
+    const name = userName(msg.from) || uid;
+    const users = await getUsers(env);
+    if (users[uid]?.asked && Date.now() - users[uid].asked < 3600000) {
+      return send("⏳ Запрос уже у владельца бота, жди ответа.");
+    }
+    users[uid] = { name, asked: Date.now() };
+    await saveUsers(env, users);
+    await notifyOwners(env, `👤 ${name} (id ${uid}) хочет пользоваться ботом.`, {
+      reply_markup: { inline_keyboard: [[{ text: "✅ Разрешить", callback_data: "acc:" + uid }, { text: "🚫 Отклонить", callback_data: "rej:" + uid }]] },
+    });
+    return send("👋 Это бот с графиками TradingView. Я отправил запрос владельцу — как только он разрешит, напишу тебе.");
+  }
+  const onlyOwner = () => send("⚙️ Настройки меняет только владелец бота. Тебе доступно: написать название инструмента (биткоин, эпл, золото…), /chart, /help.");
 
   // Voice message -> speech to text (Workers AI Whisper), then handled like typed text
   if (msg.voice || msg.audio) {
@@ -553,6 +638,10 @@ async function handle(update, env) {
   const cmd = parts[0].split("@")[0].toLowerCase();
 
   if (cmd === "/start" || cmd === "/menu") {
+    if (!canConfigure(role)) {
+      return send("Напиши название инструмента — биткоин, эпл, золото, нефть — или нажми 📊 График. Можно с таймфреймом и индикатором: «эпл дневной с ma 150». /help — подробнее.",
+        { reply_markup: { keyboard: [[{ text: BTN.chart }]], resize_keyboard: true, one_time_keyboard: true } });
+    }
     // show the permanent button panel, then the settings
     await send("Кнопки: 📊 График — прислать сейчас, ⚙️ Настройки — всё остальное (там же Старт/Стоп автоотправки).\nПанель сворачивается после нажатия; открыть снова — значок клавиатуры ⌨️ справа от поля ввода или /menu.", { reply_markup: MENU });
     const s = await getSettings(env);
@@ -560,6 +649,13 @@ async function handle(update, env) {
   }
 
   if (cmd === "/help") return send(HELP);
+
+  if (cmd === "/users") {
+    if (role !== "owner") return onlyOwner();
+    return sendUsers(env, msg.chat.id);
+  }
+
+  if (!canConfigure(role) && ["/settings", "/add", "/del", "/on", "/off", "/hours", "/period", "/range"].includes(cmd)) return onlyOwner();
 
   if (cmd === "/settings") {
     const s = await getSettings(env);
@@ -606,6 +702,7 @@ async function handle(update, env) {
     // "добавь в рассылку биткоин" / "убери из рассылки золото" -> edit the auto-send list
     const edit = parseListEdit(raw);
     if (edit) {
+      if (!canConfigure(role)) return onlyOwner();
       const { symbols } = await resolveSymbols(env, edit.what);
       if (!symbols.length) return send(`Не понял, какой инструмент ${edit.add ? "добавить" : "убрать"} 🤔 Напиши, например: добавь в рассылку биткоин`);
       return send(...(await editList(env, edit.add, symbols)));
@@ -619,7 +716,7 @@ async function handle(update, env) {
     if (!symbols.length) {
       return send("Не понял, какой это инструмент 🤔\nНапиши название или тикер, например: биткоин, эпл, золото, нефть, NASDAQ:TSLA\nМожно с таймфреймом и индикатором: «эпл дневной с ma 150»");
     }
-    const r = await runWorkflow(env, true, symbols.join(","), q);
+    const r = await runWorkflow(env, true, symbols.join(","), { ...q, chat: msg.chat.id });
     return send(r.ok ? `⏳ Делаю ${describe(symbols, q)}, пришлю примерно через минуту` : `⚠️ GitHub не запустил робота (${r.status})`);
   }
 
@@ -631,7 +728,7 @@ async function handle(update, env) {
   const q = parseRequest(rest);
   let { symbols: wanted } = await resolveSymbols(env, q.rest || rest);
   if (!wanted.length) wanted = (q.rest || rest).split(/\s+/).map((p) => normalize(env, p)).filter(Boolean); // raw tickers like usdjpy
-  const r = await runWorkflow(env, true, wanted.join(","), q);
+  const r = await runWorkflow(env, true, wanted.join(","), { ...q, chat: msg.chat.id });
   return send(r.ok
     ? `⏳ Делаю ${describe(wanted, q)}, пришлю примерно через минуту`
     : `⚠️ GitHub не запустил робота (${r.status}). Проверь GH_TOKEN в Cloudflare.\n${r.body.slice(0, 300)}`);
@@ -644,6 +741,7 @@ async function runWorkflow(env, force, symbols = "", opts = {}) {
   if (opts.interval) extra.interval = opts.interval;             // "1D", "60" - this run only
   if (opts.studies?.length) extra.studies = opts.studies.join(","); // "sma:150,rsi:14"
   if (opts.only) extra.only_studies = "true";
+  if (opts.chat) extra.chat_id = String(opts.chat);                // reply into the chat that asked
   const r = await fetch(
     `https://api.github.com/repos/${GH_REPO}/actions/workflows/${GH_WORKFLOW}/dispatches`,
     {

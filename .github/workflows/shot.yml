@@ -27,6 +27,9 @@ on:
       only_studies:
         description: "true = скрыть твои индикаторы, показать только из studies"
         default: "false"
+      chat_id:
+        description: "Куда прислать картинки (пусто = TG_CHAT_ID, т.е. группа)"
+        default: ""
   push:                       # тест без браузера: изменение файла .run-test
     paths: [".run-test"]
 
@@ -69,6 +72,7 @@ jobs:
           INTERVAL_OVERRIDE: ${{ inputs.interval }}
           STUDIES: ${{ inputs.studies }}
           ONLY_STUDIES: ${{ inputs.only_studies == 'true' && '1' || '' }}
+          CHAT_ID_OVERRIDE: ${{ inputs.chat_id }}
         run: python tv_shot.py
 
       # GitHub отключает расписание, если в репозитории 60 дней нет коммитов.
