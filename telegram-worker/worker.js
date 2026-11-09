@@ -659,8 +659,12 @@ async function handle(update, env) {
   // --- text ------------------------------------------------------------------
   const msg = update.message;
   if (!msg) return;
-  const send = (t, extra = {}) => tg(env, "sendMessage", { chat_id: msg.chat.id, text: t, ...extra });
   const role = await roleOf(env, msg.chat.id, msg.from?.id);
+  const presets = await getPresets(env);
+  // every reply carries the preset buttons, so the panel is always visible
+  const send = (t, extra = {}) => tg(env, "sendMessage", {
+    chat_id: msg.chat.id, text: t, reply_markup: presetKeyboard(presets, role), ...extra,
+  });
 
   if (role === "none") {
     if (msg.chat.type !== "private") return;              // strangers' groups: silence
@@ -675,7 +679,7 @@ async function handle(update, env) {
     await notifyOwners(env, `👤 ${name} (id ${uid}) хочет пользоваться ботом.`, {
       reply_markup: { inline_keyboard: [[{ text: "✅ Разрешить", callback_data: "acc:" + uid }, { text: "🚫 Отклонить", callback_data: "rej:" + uid }]] },
     });
-    return send("👋 Это бот с графиками TradingView. Я отправил запрос владельцу — как только он разрешит, напишу тебе.");
+    return send("👋 Это бот с графиками TradingView. Я отправил запрос владельцу — как только он разрешит, напишу тебе.", { reply_markup: { remove_keyboard: true } });
   }
   const onlyOwner = () => send("⚙️ Настройки меняет только владелец бота. Тебе доступно: написать название инструмента (биткоин, эпл, золото…), /chart, /help.");
 
@@ -689,7 +693,6 @@ async function handle(update, env) {
   if (!msg.text) return;
 
   const raw = msg.text.trim();
-  const presets = await getPresets(env);
   const awaitKey = `await:${msg.chat.id}:${msg.from.id}`;
 
   // a preset button -> remember it, ask for the instrument
@@ -697,7 +700,7 @@ async function handle(update, env) {
   if (pressed) {
     await env.SETTINGS.put(awaitKey, JSON.stringify(pressed), { expirationTtl: 600 });
     return send(`${pressed.name} (${presetText(pressed)}).\nКакой инструмент? Напиши название или тикер: Coca-Cola, Apple, биткоин, золото… Можно несколько через запятую.`,
-      { reply_markup: { force_reply: true, input_field_placeholder: "например: Apple" } });
+      { reply_markup: { ...presetKeyboard(presets, role), input_field_placeholder: "например: Apple" } });
   }
   // the instrument after a preset button
   if (!raw.startsWith("/")) {
