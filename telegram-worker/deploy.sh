@@ -9,12 +9,17 @@ API="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/workers/scripts/$SCR
 AUTH=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN:?}")
 
 # 0) is the token itself fine? (prints only status and lengths, never the values)
-tok="${CLOUDFLARE_API_TOKEN}"
-echo "token length: ${#tok}, account id length: ${#ACCOUNT}"
-case "$tok" in *[[:space:]]*) echo "::warning::token contains whitespace/newline - re-paste it without spaces";; esac
-curl -sS -H "Authorization: Bearer ${tok//[$'\r\n ']/}" https://api.cloudflare.com/client/v4/user/tokens/verify \
+# The secret may hold the whole sample curl command Cloudflare shows ("... Bearer <token> ...") -
+# pull the 40-character token out of it either way.
+tok=$(printf '%s' "${CLOUDFLARE_API_TOKEN}" | python3 -c '
+import re,sys
+raw=sys.stdin.read()
+m=re.search(r"Bearer\s+([A-Za-z0-9_-]{40})", raw) or re.search(r"([A-Za-z0-9_-]{40})", raw)
+print(m.group(1) if m else raw.strip())')
+echo "token length: ${#tok} (raw ${#CLOUDFLARE_API_TOKEN}), account id length: ${#ACCOUNT}"
+curl -sS -H "Authorization: Bearer $tok" https://api.cloudflare.com/client/v4/user/tokens/verify \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print("token verify:", "OK, status " + d["result"]["status"] if d.get("success") else "FAILED " + json.dumps(d.get("errors")))'
-AUTH=(-H "Authorization: Bearer ${tok//[$'\r\n ']/}")
+AUTH=(-H "Authorization: Bearer $tok")
 
 # 1) current bindings (secrets come back without values and are kept via keep_bindings)
 settings=$(curl -sS "${AUTH[@]}" "$API/settings")
